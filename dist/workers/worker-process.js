@@ -4,6 +4,7 @@
  * This file is forked by the worker pool to execute subtasks in parallel.
  * Communicates with the parent process via IPC.
  */
+import 'dotenv/config';
 import { SharedMemory } from '../memory/shared-memory.js';
 import { createWorkerAgent } from '../agents/worker-agent.js';
 import { AgentTypeSchema } from '../config/schema.js';
@@ -28,14 +29,23 @@ function send(msg) {
     }
 }
 /**
- * Start sending heartbeats
+ * Start sending heartbeats - both IPC and Redis
  */
 function startHeartbeat() {
-    heartbeatTimer = setInterval(() => {
+    heartbeatTimer = setInterval(async () => {
         send({
             type: 'heartbeat',
             workerId
         });
+        // Also update Redis heartbeat to keep health monitor happy
+        if (memory) {
+            try {
+                await memory.updateHeartbeat(workerId);
+            }
+            catch {
+                // Ignore heartbeat update errors
+            }
+        }
     }, heartbeatIntervalMs);
 }
 /**

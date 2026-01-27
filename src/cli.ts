@@ -1,15 +1,56 @@
 #!/usr/bin/env node
 
+import 'dotenv/config';
 import { Command } from 'commander';
+import { readFileSync, existsSync } from 'fs';
+import { resolve, isAbsolute } from 'path';
 import { loadConfig } from './config/index.js';
 import { Orchestrator, OrchestratorConfig } from './orchestrator/orchestrator.js';
 import { SharedMemory } from './memory/shared-memory.js';
 import { AggregatedResult } from './orchestrator/aggregator.js';
-import { createLogger } from './utils/logger.js';
+import { createLogger, setLogFile, logToFile } from './utils/logger.js';
 import { TaskTypeSchema } from './config/schema.js';
 import { StrategyType } from './tasks/strategies/index.js';
 
 const logger = createLogger('cli');
+
+/**
+ * Load task description from a file or return the string as-is
+ * Supports:
+ *   - @path/to/file.md  (explicit file reference)
+ *   - path/to/file.md   (if path ends with .md and file exists)
+ *   - "regular string"  (plain text description)
+ */
+function loadDescription(input: string): string {
+  // Handle @file.md syntax
+  if (input.startsWith('@')) {
+    const filePath = input.slice(1);
+    const resolvedPath = isAbsolute(filePath) ? filePath : resolve(process.cwd(), filePath);
+
+    if (!existsSync(resolvedPath)) {
+      console.error(`❌ Task file not found: ${resolvedPath}`);
+      process.exit(1);
+    }
+
+    const content = readFileSync(resolvedPath, 'utf-8');
+    console.log(`📄 Loaded task description from: ${resolvedPath}`);
+    return content;
+  }
+
+  // Handle direct .md file path (if file exists)
+  if (input.endsWith('.md')) {
+    const resolvedPath = isAbsolute(input) ? input : resolve(process.cwd(), input);
+
+    if (existsSync(resolvedPath)) {
+      const content = readFileSync(resolvedPath, 'utf-8');
+      console.log(`📄 Loaded task description from: ${resolvedPath}`);
+      return content;
+    }
+  }
+
+  // Return as plain text description
+  return input;
+}
 
 const program = new Command();
 
@@ -21,14 +62,14 @@ program
 program
   .command('run')
   .description('Execute a task with multiple AI agents')
-  .argument('<description>', 'Description of the task to execute')
+  .argument('<description>', 'Task description or path to .md file (use @file.md or file.md)')
   .option('-p, --project <path>', 'Path to the project directory', process.cwd())
   .option('-t, --type <type>', 'Task type (feature, bugfix, refactor, research)', 'feature')
   .option('-w, --max-workers <number>', 'Maximum number of parallel workers', '4')
   .option('-s, --strategy <strategy>', 'Decomposition strategy (parallel, hierarchical)', 'parallel')
   .option('--timeout <ms>', 'Timeout in milliseconds', '300000')
   .option('--verbose', 'Show detailed output')
-  .action(async (description: string, options) => {
+  .action(async (descriptionInput: string, options) => {
     try {
       const config = loadConfig();
 
@@ -36,6 +77,9 @@ program
         console.error('❌ ANTHROPIC_API_KEY environment variable is required');
         process.exit(1);
       }
+
+      // Load description from file if it's a file path
+      const description = loadDescription(descriptionInput);
 
       const typeResult = TaskTypeSchema.safeParse(options.type);
       if (!typeResult.success) {
@@ -56,11 +100,20 @@ program
         decompositionStrategy: strategy
       };
 
+      // Set up log file
+      const logFile = setLogFile(options.project);
+
+      // Helper to log to both console and file
+      const log = (msg: string) => {
+        console.log(msg);
+        logToFile(msg);
+      };
+
       const orchestrator = new Orchestrator(orchestratorConfig);
 
       // Handle graceful shutdown
       const shutdown = async () => {
-        console.log('\n⏹️  Shutting down...');
+        log('\n⏹️  Shutting down...');
         await orchestrator.shutdown();
         process.exit(0);
       };
@@ -68,19 +121,64 @@ program
       process.on('SIGINT', shutdown);
       process.on('SIGTERM', shutdown);
 
-      console.log('\n🤖 AIChestrator - Multi-Agent Task Execution\n');
-      console.log('┌─────────────────────────────────────────────────────────');
-      console.log(`│ 📋 Task: ${description.substring(0, 50)}${description.length > 50 ? '...' : ''}`);
-      console.log(`│ 📁 Project: ${options.project}`);
-      console.log(`│ 🔧 Type: ${options.type}`);
-      console.log(`│ 🧠 Strategy: ${strategy}`);
-      console.log(`│ 👥 Max Workers: ${options.maxWorkers}`);
-      console.log('└─────────────────────────────────────────────────────────\n');
+      // Show first line or truncated description for display
+      const displayDesc = description.split('\n')[0]?.substring(0, 50) ?? description.substring(0, 50);
 
-      console.log('⏳ Initializing orchestrator...');
+      log('\n🤖 AIChestrator - Multi-Agent Task Execution\n');
+      log('┌─────────────────────────────────────────────────────────');
+      log(`│ 📋 Task: ${displayDesc}${description.length > 50 ? '...' : ''}`);
+      log(`│ 📁 Project: ${options.project}`);
+      log(`│ 🔧 Type: ${options.type}`);
+      log(`│ 🧠 Strategy: ${strategy}`);
+      log(`│ 👥 Max Workers: ${options.maxWorkers}`);
+      log(`│ 📝 Log file: ${logFile}`);
+      log('└─────────────────────────────────────────────────────────\n');
+
+      log('⏳ Initializing orchestrator...');
       await orchestrator.initialize();
 
-      console.log('🔄 Decomposing task into subtasks...\n');
+      log('🔄 Decomposing task into subtasks...\n');
+
+      // Track progress for display
+      const activeSubtasks = new Map<string, { startTime: number }>();
+      let completedCount = 0;
+      let totalSubtasks = 0;
+
+      // Subscribe to progress events
+      const eventBus = orchestrator.getEventBus();
+
+      eventBus.on('subtask:assigned' as any, (event: any) => {
+        const shortId = event.subtaskId?.substring(0, 8) ?? '?';
+        const workerId = event.agentId?.substring(0, 8) ?? '?';
+        activeSubtasks.set(event.subtaskId, { startTime: Date.now() });
+        log(`  🚀 [${shortId}] Assigned to worker ${workerId}`);
+      });
+
+      eventBus.on('subtask:completed' as any, (event: any) => {
+        const shortId = event.subtaskId?.substring(0, 8) ?? '?';
+        const info = activeSubtasks.get(event.subtaskId);
+        const duration = info ? ((Date.now() - info.startTime) / 1000).toFixed(1) : '?';
+        activeSubtasks.delete(event.subtaskId);
+        completedCount++;
+        const status = event.success ? '✅' : '❌';
+        log(`  ${status} [${shortId}] Done in ${duration}s (${completedCount}/${totalSubtasks})`);
+      });
+
+      eventBus.on('task:started' as any, (event: any) => {
+        totalSubtasks = event.subtaskCount ?? 0;
+        log(`📋 Decomposed into ${totalSubtasks} subtasks\n`);
+
+        // Show subtask list
+        orchestrator.getSubtasks(event.taskId).then((subtasks) => {
+          log('Subtasks:');
+          for (const st of subtasks) {
+            const shortId = st.id.substring(0, 8);
+            const desc = st.description.substring(0, 60);
+            log(`  • [${shortId}] [${st.agentType}] ${desc}${st.description.length > 60 ? '...' : ''}`);
+          }
+          log('\nExecution:\n');
+        }).catch(() => {});
+      });
 
       const result = await orchestrator.run({
         description,
@@ -90,13 +188,14 @@ program
         timeoutMs: parseInt(options.timeout, 10)
       });
 
-      console.log('\n' + '═'.repeat(60));
-      console.log('📊 RESULTS');
-      console.log('═'.repeat(60) + '\n');
+      log('\n' + '═'.repeat(60));
+      log('📊 RESULTS');
+      log('═'.repeat(60) + '\n');
 
-      console.log(`Status: ${result.status === 'completed' ? '✅ Completed' : '❌ Failed'}`);
-      console.log(`Duration: ${(result.totalExecutionMs / 1000).toFixed(1)}s`);
-      console.log(`Task ID: ${result.taskId}`);
+      log(`Status: ${result.status === 'completed' ? '✅ Completed' : '❌ Failed'}`);
+      log(`Duration: ${(result.totalExecutionMs / 1000).toFixed(1)}s`);
+      log(`Task ID: ${result.taskId}`);
+      log(`Log file: ${logFile}`);
 
       if (result.status === 'completed' || result.status === 'failed') {
         const output = result.output as {
@@ -107,45 +206,45 @@ program
 
         if (output?.aggregated) {
           const agg = output.aggregated;
-          console.log(`\nSubtasks: ${agg.summary.total} total`);
-          console.log(`  ✓ Successful: ${agg.summary.successful}`);
-          console.log(`  ✗ Failed: ${agg.summary.failed}`);
+          log(`\nSubtasks: ${agg.summary.total} total`);
+          log(`  ✓ Successful: ${agg.summary.successful}`);
+          log(`  ✗ Failed: ${agg.summary.failed}`);
 
           if (agg.insights.length > 0) {
-            console.log('\n💡 Key Insights:');
+            log('\n💡 Key Insights:');
             for (const insight of agg.insights.slice(0, 5)) {
-              console.log(`  • ${insight}`);
+              log(`  • ${insight}`);
             }
           }
 
           if (agg.filesModified.length > 0) {
-            console.log('\n📄 Files Affected:');
+            log('\n📄 Files Affected:');
             for (const file of agg.filesModified.slice(0, 10)) {
-              console.log(`  • ${file}`);
+              log(`  • ${file}`);
             }
           }
 
           if (options.verbose && output.summary) {
-            console.log('\n' + '─'.repeat(60));
-            console.log('DETAILED SUMMARY');
-            console.log('─'.repeat(60));
-            console.log(output.summary);
+            log('\n' + '─'.repeat(60));
+            log('DETAILED SUMMARY');
+            log('─'.repeat(60));
+            log(output.summary);
           }
 
           if (options.verbose && output.mergedOutput) {
-            console.log('\n' + '─'.repeat(60));
-            console.log('MERGED OUTPUT');
-            console.log('─'.repeat(60));
-            console.log(output.mergedOutput);
+            log('\n' + '─'.repeat(60));
+            log('MERGED OUTPUT');
+            log('─'.repeat(60));
+            log(output.mergedOutput);
           }
         }
       }
 
       if (result.error) {
-        console.log(`\n❌ Error: ${result.error}`);
+        log(`\n❌ Error: ${result.error}`);
       }
 
-      console.log('\n' + '═'.repeat(60) + '\n');
+      log('\n' + '═'.repeat(60) + '\n');
 
       await orchestrator.shutdown();
       process.exit(result.status === 'completed' ? 0 : 1);

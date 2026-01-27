@@ -5,6 +5,7 @@
  * Communicates with the parent process via IPC.
  */
 
+import 'dotenv/config';
 import { SharedMemory } from '../memory/shared-memory.js';
 import { createWorkerAgent } from '../agents/worker-agent.js';
 import { AgentType, AgentTypeSchema, Subtask, SubtaskResult } from '../config/schema.js';
@@ -48,14 +49,22 @@ function send(msg: WorkerMessage): void {
 }
 
 /**
- * Start sending heartbeats
+ * Start sending heartbeats - both IPC and Redis
  */
 function startHeartbeat(): void {
-  heartbeatTimer = setInterval(() => {
+  heartbeatTimer = setInterval(async () => {
     send({
       type: 'heartbeat',
       workerId
     });
+    // Also update Redis heartbeat to keep health monitor happy
+    if (memory) {
+      try {
+        await memory.updateHeartbeat(workerId);
+      } catch {
+        // Ignore heartbeat update errors
+      }
+    }
   }, heartbeatIntervalMs);
 }
 

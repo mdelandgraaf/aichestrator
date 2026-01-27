@@ -1,4 +1,5 @@
 import { Task, TaskInput, TaskResult, Config } from '../config/schema.js';
+import { EventBus } from '../events/event-bus.js';
 import { StrategyType } from '../tasks/strategies/index.js';
 export interface OrchestratorConfig extends Config {
     decompositionStrategy?: StrategyType;
@@ -66,6 +67,37 @@ export declare class Orchestrator {
         dead: number;
         agents: import("./health-monitor.js").AgentHealth[];
     }>;
+    /**
+     * Get subtasks for a task
+     */
+    getSubtasks(taskId: string): Promise<{
+        status: "pending" | "executing" | "completed" | "failed" | "blocked" | "queued" | "assigned";
+        id: string;
+        description: string;
+        createdAt: number;
+        updatedAt: number;
+        parentTaskId: string;
+        agentType: "researcher" | "implementer" | "reviewer" | "tester" | "documenter";
+        dependencies: string[];
+        attempts: number;
+        maxAttempts: number;
+        error?: string | undefined;
+        assignedAgentId?: string | undefined;
+        result?: unknown;
+    }[]>;
+    /**
+     * Get the event bus for subscribing to events
+     */
+    getEventBus(): EventBus;
+    /**
+     * Subscribe to progress events with a callback
+     */
+    onProgress(callback: (data: {
+        type: string;
+        subtaskId?: string;
+        workerId?: string;
+        message?: string;
+    }) => void): void;
     /**
      * Shutdown the orchestrator gracefully
      */

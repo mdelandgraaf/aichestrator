@@ -256,8 +256,9 @@ export class WorkerPool extends EventEmitter {
     worker.status = 'busy';
     worker.currentSubtaskId = subtask.id;
 
-    // Store the callbacks for this task
+    // Store the callbacks and task info for this task
     (worker as any)._taskCallbacks = { resolve, reject };
+    (worker as any)._taskInfo = { taskId, subtaskId: subtask.id };
 
     // Send execute command to worker
     const command: WorkerCommand = {
@@ -294,11 +295,25 @@ export class WorkerPool extends EventEmitter {
 
   private handleResult(worker: PooledWorker, msg: WorkerMessage): void {
     const callbacks = (worker as any)._taskCallbacks;
+    const taskInfo = (worker as any)._taskInfo as { taskId: string; subtaskId: string } | undefined;
+
     if (callbacks) {
       const result = msg.data as SubtaskResult;
       callbacks.resolve(result);
       delete (worker as any)._taskCallbacks;
+
+      // Emit subtask completed event
+      if (taskInfo) {
+        this.eventBus.emitSubtaskCompleted(
+          taskInfo.subtaskId,
+          taskInfo.taskId,
+          result.success,
+          result.executionMs
+        );
+      }
     }
+
+    delete (worker as any)._taskInfo;
 
     // Return worker to idle pool
     this.returnWorkerToPool(worker);

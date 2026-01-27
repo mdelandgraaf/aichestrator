@@ -286,6 +286,26 @@ export class Orchestrator {
         return this.healthMonitor.getHealthReport();
     }
     /**
+     * Get subtasks for a task
+     */
+    async getSubtasks(taskId) {
+        return this.memory.getSubtasksForTask(taskId);
+    }
+    /**
+     * Get the event bus for subscribing to events
+     */
+    getEventBus() {
+        return this.eventBus;
+    }
+    /**
+     * Subscribe to progress events with a callback
+     */
+    onProgress(callback) {
+        this.workerPool.on('progress', (data) => {
+            callback({ type: 'progress', subtaskId: data.subtaskId, workerId: data.workerId });
+        });
+    }
+    /**
      * Shutdown the orchestrator gracefully
      */
     async shutdown() {

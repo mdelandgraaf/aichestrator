@@ -8,7 +8,7 @@ export interface AgentConfig {
     systemPrompt: string;
 }
 export interface AgentProgress {
-    type: 'thinking' | 'tool_use' | 'text' | 'error' | 'complete';
+    type: 'thinking' | 'tool_use' | 'text' | 'error' | 'complete' | 'file' | 'web';
     content: string;
     timestamp: number;
 }

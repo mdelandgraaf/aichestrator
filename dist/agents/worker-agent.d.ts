@@ -12,6 +12,7 @@ export declare class WorkerAgent extends BaseAgent {
     private timeoutMs;
     constructor(config: WorkerAgentConfig, memory: SharedMemory);
     execute(subtask: Subtask): AsyncGenerator<AgentProgress, SubtaskResult>;
+    private executeTool;
     private buildPrompt;
     private extractAndShareDiscoveries;
 }

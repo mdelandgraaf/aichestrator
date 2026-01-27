@@ -1,4 +1,7 @@
 import pino from 'pino';
+export declare function setLogFile(projectPath: string): string;
+export declare function getLogFile(): string | null;
+export declare function logToFile(message: string): void;
 export declare function createLogger(name: string, level?: string): pino.Logger<never, boolean>;
 export type Logger = ReturnType<typeof createLogger>;
 //# sourceMappingURL=logger.d.ts.map

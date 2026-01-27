@@ -397,6 +397,29 @@ export class Orchestrator {
   }
 
   /**
+   * Get subtasks for a task
+   */
+  async getSubtasks(taskId: string) {
+    return this.memory.getSubtasksForTask(taskId);
+  }
+
+  /**
+   * Get the event bus for subscribing to events
+   */
+  getEventBus(): EventBus {
+    return this.eventBus;
+  }
+
+  /**
+   * Subscribe to progress events with a callback
+   */
+  onProgress(callback: (data: { type: string; subtaskId?: string; workerId?: string; message?: string }) => void): void {
+    this.workerPool.on('progress', (data) => {
+      callback({ type: 'progress', subtaskId: data.subtaskId, workerId: data.workerId });
+    });
+  }
+
+  /**
    * Shutdown the orchestrator gracefully
    */
   async shutdown(): Promise<void> {
