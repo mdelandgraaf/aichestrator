@@ -39,6 +39,8 @@ export declare class Orchestrator {
     private executeSubtasks;
     /**
      * Build execution batches from subtasks based on dependencies
+     * @param subtasks - Subtasks to schedule
+     * @param alreadyCompleted - IDs of subtasks that have already completed (for dependency resolution)
      */
     private buildExecutionBatches;
     /**

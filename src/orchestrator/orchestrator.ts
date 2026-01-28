@@ -295,8 +295,9 @@ export class Orchestrator {
     );
 
     while (pendingSubtasks.length > 0) {
-      // Build batches from remaining subtasks
-      const batches = this.buildExecutionBatches(pendingSubtasks);
+      // Build batches from remaining subtasks, passing already-completed IDs for dependency resolution
+      const completedIds = new Set(completedSubtasks.map((s) => s.id));
+      const batches = this.buildExecutionBatches(pendingSubtasks, completedIds);
 
       if (batches.length === 0) {
         this.logger.warn({ taskId: task.id }, 'No executable batches, breaking');
@@ -453,10 +454,12 @@ export class Orchestrator {
 
   /**
    * Build execution batches from subtasks based on dependencies
+   * @param subtasks - Subtasks to schedule
+   * @param alreadyCompleted - IDs of subtasks that have already completed (for dependency resolution)
    */
-  private buildExecutionBatches(subtasks: Subtask[]): Subtask[][] {
+  private buildExecutionBatches(subtasks: Subtask[], alreadyCompleted: Set<string> = new Set()): Subtask[][] {
     const batches: Subtask[][] = [];
-    const completed = new Set<string>();
+    const completed = new Set<string>(alreadyCompleted); // Start with already-completed subtasks
     const remaining = new Map(subtasks.map((s) => [s.id, s]));
 
     while (remaining.size > 0) {
