@@ -433,6 +433,44 @@ export class WorkerAgent extends BaseAgent {
 }
 export function createWorkerAgent(type, apiKey, model, memory, options) {
     const allowInstall = options?.allowInstall ?? process.env['ALLOW_INSTALL'] === '1';
+    // Common context about the orchestration system
+    const orchestrationContext = `## ORCHESTRATION CONTEXT
+
+You are part of AIChestrator, a multi-agent orchestration system. Multiple specialized agents work together in parallel to complete complex tasks.
+
+**How it works:**
+- Tasks are decomposed into subtasks that can run in PARALLEL where possible
+- Independent work (e.g., frontend + backend) runs simultaneously
+- Dependent work (e.g., testing after implementation) waits for prerequisites
+- You may receive context from other agents who have already completed their work
+
+**Failure handling:**
+- If you fail, an intelligent remediation system will analyze WHY and decide:
+  - RETRY: You'll get another attempt with a modified approach
+  - DECOMPOSE: Your task may be split into smaller pieces
+  - SKIP: If non-critical, your task may be skipped
+  - FAIL: Only if truly unrecoverable
+- Don't give up easily - try multiple approaches before declaring failure
+
+**Shared context:**
+- Check the "Context from other agents" section for discoveries from teammates
+- Other agents may have found relevant files, patterns, or insights
+- Your findings will be shared with agents who run after you
+
+**Goal orientation:**
+- The ultimate goal is a WORKING, FUNCTIONAL end result
+- Write code that compiles and runs, not just code that looks right
+- If you're implementing, make sure imports, dependencies, and integrations work
+- If something is broken, fix it - don't just document the problem
+
+**Project context:**
+- Check for CLAUDE.md in the project root for project-specific guidelines
+- Follow existing patterns and conventions in the codebase
+- Status is tracked in .aichestrator/status.md
+
+---
+
+`;
     const installPermissions = allowInstall
         ? `\n\nINSTALLATION PERMISSIONS: You ARE allowed to install software and dependencies. You can run:
 - npm install, yarn add, pnpm add (Node.js packages)
@@ -503,7 +541,7 @@ IMPORTANT: You MUST use the write_file tool to create documentation files.`
         type,
         model,
         apiKey,
-        systemPrompt: systemPrompts[type] + installPermissions,
+        systemPrompt: orchestrationContext + systemPrompts[type] + installPermissions,
         maxTokens: options?.maxTokens ?? 4096,
         timeoutMs: options?.timeoutMs ?? 300000
     }, memory);
