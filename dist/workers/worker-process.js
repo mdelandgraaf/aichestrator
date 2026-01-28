@@ -9,6 +9,8 @@ import { SharedMemory } from '../memory/shared-memory.js';
 import { createWorkerAgent } from '../agents/worker-agent.js';
 import { AgentTypeSchema } from '../config/schema.js';
 import { createLogger } from '../utils/logger.js';
+// Increase max listeners to accommodate Redis connections
+process.setMaxListeners(15);
 const logger = createLogger('worker-process');
 // Environment variables
 const workerId = process.env['WORKER_ID'] ?? 'unknown';

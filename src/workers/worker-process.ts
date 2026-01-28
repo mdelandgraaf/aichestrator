@@ -11,6 +11,9 @@ import { createWorkerAgent } from '../agents/worker-agent.js';
 import { AgentType, AgentTypeSchema, Subtask, SubtaskResult } from '../config/schema.js';
 import { createLogger } from '../utils/logger.js';
 
+// Increase max listeners to accommodate Redis connections
+process.setMaxListeners(15);
+
 // IPC Message types (must match worker-pool.ts)
 interface WorkerMessage {
   type: 'ready' | 'progress' | 'heartbeat' | 'result' | 'error' | 'discovery';

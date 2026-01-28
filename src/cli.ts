@@ -12,6 +12,10 @@ import { createLogger, setLogFile, logToFile } from './utils/logger.js';
 import { TaskTypeSchema } from './config/schema.js';
 import { StrategyType } from './tasks/strategies/index.js';
 
+// Increase max listeners to accommodate multiple Redis connections
+// (each SharedMemory creates 2 Redis connections that add exit handlers)
+process.setMaxListeners(20);
+
 const logger = createLogger('cli');
 
 /**

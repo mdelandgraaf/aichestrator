@@ -8,6 +8,9 @@ import { Orchestrator } from './orchestrator/orchestrator.js';
 import { SharedMemory } from './memory/shared-memory.js';
 import { createLogger, setLogFile, logToFile } from './utils/logger.js';
 import { TaskTypeSchema } from './config/schema.js';
+// Increase max listeners to accommodate multiple Redis connections
+// (each SharedMemory creates 2 Redis connections that add exit handlers)
+process.setMaxListeners(20);
 const logger = createLogger('cli');
 /**
  * Load task description from a file or return the string as-is
