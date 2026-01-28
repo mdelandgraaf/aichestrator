@@ -11,6 +11,7 @@ export declare class Orchestrator {
     private eventBus;
     private healthMonitor;
     private aggregator;
+    private remediator;
     private logger;
     private isShuttingDown;
     private isInitialized;
@@ -33,7 +34,7 @@ export declare class Orchestrator {
      */
     private createSubtasksFromDecomposition;
     /**
-     * Execute subtasks respecting dependencies with auto-retry
+     * Execute subtasks with intelligent remediation for failures
      */
     private executeSubtasks;
     /**

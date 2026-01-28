@@ -5,6 +5,7 @@ import { EventBus } from '../events/event-bus.js';
 import { EventTypes } from '../events/event-types.js';
 import { HealthMonitor } from './health-monitor.js';
 import { ResultAggregator } from './aggregator.js';
+import { Remediator } from './remediator.js';
 import { createStrategy } from '../tasks/strategies/index.js';
 import { createLogger } from '../utils/logger.js';
 import { TaskError } from '../utils/errors.js';
@@ -15,6 +16,7 @@ export class Orchestrator {
     eventBus;
     healthMonitor;
     aggregator;
+    remediator;
     logger;
     isShuttingDown = false;
     isInitialized = false;
@@ -25,6 +27,7 @@ export class Orchestrator {
         this.memory = new SharedMemory(config.redis.url);
         this.eventBus = new EventBus(config.redis.url);
         this.aggregator = new ResultAggregator(this.memory);
+        this.remediator = new Remediator(config.anthropic.apiKey, config.anthropic.model);
         // Initialize worker pool
         this.workerPool = new WorkerPool({
             maxWorkers: config.orchestrator.maxWorkers,
@@ -203,63 +206,126 @@ export class Orchestrator {
         return subtasks;
     }
     /**
-     * Execute subtasks respecting dependencies with auto-retry
+     * Execute subtasks with intelligent remediation for failures
      */
     async executeSubtasks(task, subtasks) {
-        const batches = this.buildExecutionBatches(subtasks);
-        const maxRetries = this.config.orchestrator.maxRetries ?? 2;
-        this.logger.info({ taskId: task.id, batchCount: batches.length, maxRetries }, 'Executing in batches');
-        for (let i = 0; i < batches.length; i++) {
-            const batch = batches[i];
-            this.logger.info({ taskId: task.id, batch: i + 1, count: batch.length }, 'Starting batch');
+        const maxAttempts = (this.config.orchestrator.maxRetries ?? 2) + 1;
+        const attemptCounts = new Map();
+        let pendingSubtasks = [...subtasks];
+        const completedSubtasks = [];
+        this.logger.info({ taskId: task.id, subtaskCount: subtasks.length, maxAttempts }, 'Starting intelligent execution');
+        while (pendingSubtasks.length > 0) {
+            // Build batches from remaining subtasks
+            const batches = this.buildExecutionBatches(pendingSubtasks);
+            if (batches.length === 0) {
+                this.logger.warn({ taskId: task.id }, 'No executable batches, breaking');
+                break;
+            }
+            // Execute first batch (subtasks with satisfied dependencies)
+            const batch = batches[0];
+            this.logger.info({ taskId: task.id, batchSize: batch.length, remaining: pendingSubtasks.length }, 'Executing batch');
             // Execute all subtasks in this batch in parallel
             const items = batch.map((subtask) => ({
                 subtask,
                 taskId: task.id
             }));
-            let results = await this.workerPool.executeAll(items);
-            // Retry failed subtasks automatically
-            let failedResults = results.filter((r) => !r.success);
-            let retryCount = 0;
-            while (failedResults.length > 0 && retryCount < maxRetries) {
-                retryCount++;
-                this.logger.info({ taskId: task.id, failedCount: failedResults.length, retry: retryCount, maxRetries }, 'Retrying failed subtasks');
-                // Get the failed subtasks
-                const failedSubtaskIds = new Set(failedResults.map((r) => r.subtaskId));
-                const failedSubtasks = batch.filter((s) => failedSubtaskIds.has(s.id));
-                // Update subtask status back to pending for retry
-                for (const subtask of failedSubtasks) {
-                    await this.memory.updateSubtaskStatus(subtask.id, 'pending');
+            const results = await this.workerPool.executeAll(items);
+            // Process results and handle failures intelligently
+            const newSubtasksToAdd = [];
+            for (let i = 0; i < results.length; i++) {
+                const result = results[i];
+                const subtask = batch.find((s) => s.id === result.subtaskId);
+                const attempts = (attemptCounts.get(subtask.id) ?? 0) + 1;
+                attemptCounts.set(subtask.id, attempts);
+                if (result.success) {
+                    // Success - store result and mark complete
+                    await this.memory.storeResult(task.id, result);
+                    await this.memory.updateSubtaskStatus(subtask.id, 'completed');
+                    completedSubtasks.push(subtask);
+                    pendingSubtasks = pendingSubtasks.filter((s) => s.id !== subtask.id);
+                    this.logger.info({ taskId: task.id, subtaskId: subtask.id }, 'Subtask completed successfully');
                 }
-                // Wait before retrying (exponential backoff)
-                await new Promise((resolve) => setTimeout(resolve, 1000 * retryCount));
-                const retryItems = failedSubtasks.map((subtask) => ({
-                    subtask,
-                    taskId: task.id
-                }));
-                const retryResults = await this.workerPool.executeAll(retryItems);
-                // Update the main results with retry results
-                for (const retryResult of retryResults) {
-                    const idx = results.findIndex((r) => r.subtaskId === retryResult.subtaskId);
-                    if (idx >= 0) {
-                        results[idx] = retryResult;
+                else {
+                    // Failure - use intelligent remediation
+                    const decision = await this.remediator.analyzeFailure({
+                        subtask,
+                        result,
+                        attemptNumber: attempts,
+                        maxAttempts,
+                        completedSubtasks,
+                        projectPath: task.projectPath
+                    });
+                    this.logger.info({ taskId: task.id, subtaskId: subtask.id, action: decision.action, reason: decision.reason }, 'Remediation decision');
+                    switch (decision.action) {
+                        case 'retry':
+                            if (attempts < maxAttempts) {
+                                // Update description if provided
+                                if (decision.modifiedDescription) {
+                                    subtask.description = decision.modifiedDescription;
+                                    await this.memory.updateSubtaskStatus(subtask.id, 'pending');
+                                }
+                                // Keep in pending for retry (already there)
+                                this.logger.info({ taskId: task.id, subtaskId: subtask.id, attempt: attempts }, 'Will retry with modified approach');
+                            }
+                            else {
+                                // Max attempts reached, mark as failed
+                                await this.memory.storeResult(task.id, result);
+                                await this.memory.updateSubtaskStatus(subtask.id, 'failed', { error: result.error });
+                                pendingSubtasks = pendingSubtasks.filter((s) => s.id !== subtask.id);
+                            }
+                            break;
+                        case 'decompose':
+                            // Create new subtasks from decomposition
+                            if (decision.newSubtasks && decision.newSubtasks.length > 0) {
+                                const decomposed = await this.createSubtasksFromDecomposition(task.id, decision.newSubtasks.map((s) => ({
+                                    description: s.description,
+                                    agentType: s.agentType,
+                                    dependencies: s.dependencies,
+                                    priority: 1,
+                                    estimatedComplexity: 1
+                                })));
+                                newSubtasksToAdd.push(...decomposed);
+                                this.logger.info({ taskId: task.id, subtaskId: subtask.id, newCount: decomposed.length }, 'Decomposed into smaller subtasks');
+                            }
+                            // Mark original as skipped (replaced by decomposition)
+                            await this.memory.updateSubtaskStatus(subtask.id, 'completed', { result: 'Decomposed into smaller tasks' });
+                            pendingSubtasks = pendingSubtasks.filter((s) => s.id !== subtask.id);
+                            break;
+                        case 'skip':
+                            // Mark as skipped and continue
+                            const skipResult = {
+                                subtaskId: subtask.id,
+                                success: true,
+                                output: `Skipped: ${decision.reason}`,
+                                executionMs: 0
+                            };
+                            await this.memory.storeResult(task.id, skipResult);
+                            await this.memory.updateSubtaskStatus(subtask.id, 'completed', { result: 'Skipped' });
+                            pendingSubtasks = pendingSubtasks.filter((s) => s.id !== subtask.id);
+                            break;
+                        case 'fail':
+                            // Mark as permanent failure
+                            await this.memory.storeResult(task.id, result);
+                            await this.memory.updateSubtaskStatus(subtask.id, 'failed', { error: result.error });
+                            pendingSubtasks = pendingSubtasks.filter((s) => s.id !== subtask.id);
+                            break;
                     }
                 }
-                failedResults = results.filter((r) => !r.success);
             }
-            // Store final results
-            for (const result of results) {
-                await this.memory.storeResult(task.id, result);
+            // Add any new subtasks from decomposition
+            if (newSubtasksToAdd.length > 0) {
+                pendingSubtasks.push(...newSubtasksToAdd);
             }
             // Report progress
-            const progress = await this.getProgress(task.id, subtasks.length);
+            const allSubtasks = await this.memory.getSubtasksForTask(task.id);
+            const progress = await this.getProgress(task.id, allSubtasks.length);
             await this.eventBus.emitTaskProgress(task.id, 'executing', progress.completed, progress.total);
-            // Log any remaining failures after retries
-            const finalFailedCount = results.filter((r) => !r.success).length;
-            if (finalFailedCount > 0) {
-                this.logger.warn({ taskId: task.id, failedCount: finalFailedCount, retriesAttempted: retryCount }, 'Some subtasks failed after retries');
+            // Small delay between batches to prevent overwhelming
+            if (pendingSubtasks.length > 0) {
+                await new Promise((resolve) => setTimeout(resolve, 500));
             }
         }
+        this.logger.info({ taskId: task.id, completed: completedSubtasks.length }, 'Execution complete');
     }
     /**
      * Build execution batches from subtasks based on dependencies
