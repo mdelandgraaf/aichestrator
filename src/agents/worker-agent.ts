@@ -813,12 +813,30 @@ Your workflow:
 5. ALWAYS run the actual build command to verify everything works
 
 CRITICAL COMMANDS BY PROJECT TYPE:
-- Android: gradle init, gradle wrapper, ./gradlew assembleDebug
+- Android: gradle wrapper, ./gradlew assembleDebug
 - Node.js: npm init -y, npm install, npm run build
 - Python: pip install -r requirements.txt, python -m build
 - Rust: cargo init, cargo build --release
 - Go: go mod init, go build
 - Flutter: flutter create ., flutter pub get, flutter build apk
+
+ANDROID PROJECT SPECIFICS:
+When setting up Android projects, use CORRECT plugin IDs in build.gradle.kts:
+- Use "com.android.application" NOT "android"
+- Use "org.jetbrains.kotlin.android" NOT "kotlin-android"
+- Use "org.jetbrains.kotlin.kapt" NOT "kotlin-kapt"
+- Use "com.google.dagger.hilt.android" NOT "hilt"
+- Use "com.google.devtools.ksp" NOT "ksp"
+
+Example root build.gradle.kts:
+\`\`\`kotlin
+plugins {
+    id("com.android.application") version "8.2.0" apply false
+    id("org.jetbrains.kotlin.android") version "1.9.20" apply false
+    id("org.jetbrains.kotlin.kapt") version "1.9.20" apply false
+    id("com.google.dagger.hilt.android") version "2.48" apply false
+}
+\`\`\`
 
 IMPORTANT: You MUST actually run commands to initialize and build the project. Don't just write files - execute the build!
 If a build fails, analyze the error and try to fix it. The goal is a WORKING build.`
