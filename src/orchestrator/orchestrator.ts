@@ -285,9 +285,12 @@ export class Orchestrator {
    */
   private async executeSubtasks(task: Task, subtasks: Subtask[]): Promise<void> {
     const maxAttempts = (this.config.orchestrator.maxRetries ?? 2) + 1;
+    const maxSelfHealAttempts = 3; // Cap self-healing to prevent infinite loops
+    let selfHealAttempts = 0;
     const attemptCounts = new Map<string, number>();
     let pendingSubtasks = [...subtasks];
     const completedSubtasks: Subtask[] = [];
+    const failedSubtasks: Subtask[] = []; // Track failed subtasks for dependency resolution
 
     this.logger.info(
       { taskId: task.id, subtaskCount: subtasks.length, maxAttempts },
@@ -295,12 +298,106 @@ export class Orchestrator {
     );
 
     while (pendingSubtasks.length > 0) {
-      // Build batches from remaining subtasks, passing already-completed IDs for dependency resolution
+      // Build batches from remaining subtasks, passing already-completed and failed IDs for dependency resolution
       const completedIds = new Set(completedSubtasks.map((s) => s.id));
-      const batches = this.buildExecutionBatches(pendingSubtasks, completedIds);
+      const failedIds = new Set(failedSubtasks.map((s) => s.id));
+      const { batches, blockedByFailure } = this.buildExecutionBatchesWithFailureHandling(pendingSubtasks, completedIds, failedIds);
+
+      // Handle subtasks blocked by failed dependencies
+      if (blockedByFailure.length > 0) {
+        this.logger.warn(
+          { taskId: task.id, blockedCount: blockedByFailure.length },
+          'Subtasks blocked by failed dependencies'
+        );
+
+        // Try self-healing if we haven't exhausted attempts
+        if (selfHealAttempts < maxSelfHealAttempts) {
+          // Find the failed subtask that is blocking the most work
+          const failedResults = await this.memory.getResults(task.id);
+
+          // Find which failed subtask caused the blockage
+          const blockingFailedId = this.findBlockingFailure(blockedByFailure, failedSubtasks);
+          const blockingFailed = blockingFailedId ? failedSubtasks.find((s) => s.id === blockingFailedId) : null;
+          const blockingError = blockingFailedId
+            ? failedResults.find((r) => r.subtaskId === blockingFailedId)?.error
+            : null;
+
+          if (blockingFailed && blockingError) {
+            selfHealAttempts++;
+            this.logger.info(
+              { taskId: task.id, attempt: selfHealAttempts, maxAttempts: maxSelfHealAttempts, failedSubtaskId: blockingFailed.id },
+              'Attempting self-healing for failed dependency'
+            );
+
+            // Create a fix subtask based on what failed
+            const fixSubtask = await this.createFixSubtask(task, blockingError, blockingFailed);
+            if (fixSubtask) {
+              // Remove blocked subtasks from pending (they'll be re-evaluated after fix)
+              const blockedIds = new Set(blockedByFailure.map((s) => s.id));
+              pendingSubtasks = pendingSubtasks.filter((s) => !blockedIds.has(s.id));
+
+              // Re-add blocked subtasks with dependencies updated to the fix subtask
+              for (const blocked of blockedByFailure) {
+                // Replace the failed dependency with the fix subtask
+                blocked.dependencies = blocked.dependencies.map(
+                  (dep) => dep === blockingFailedId ? fixSubtask.id : dep
+                );
+                pendingSubtasks.push(blocked);
+              }
+
+              // Add fix subtask to pending
+              pendingSubtasks.push(fixSubtask);
+
+              // Remove the blocking failure from failed list (replaced by fix)
+              const failedIdx = failedSubtasks.findIndex((s) => s.id === blockingFailedId);
+              if (failedIdx >= 0) failedSubtasks.splice(failedIdx, 1);
+
+              continue; // Restart the loop
+            }
+          }
+        } else if (selfHealAttempts >= maxSelfHealAttempts) {
+          this.logger.warn(
+            { taskId: task.id, selfHealAttempts },
+            'Max self-healing attempts reached, cascading failures'
+          );
+        }
+
+        // No self-healing possible: mark blocked subtasks as failed
+        for (const blocked of blockedByFailure) {
+          const skipResult: SubtaskResult = {
+            subtaskId: blocked.id,
+            success: false,
+            output: `Skipped: dependency failed`,
+            error: 'Dependency subtask failed',
+            executionMs: 0
+          };
+          await this.memory.storeResult(task.id, skipResult);
+          await this.memory.updateSubtaskStatus(blocked.id, 'failed', { error: 'Dependency failed' });
+          pendingSubtasks = pendingSubtasks.filter((s) => s.id !== blocked.id);
+          failedSubtasks.push(blocked);
+        }
+      }
 
       if (batches.length === 0) {
-        this.logger.warn({ taskId: task.id }, 'No executable batches, breaking');
+        if (pendingSubtasks.length > 0) {
+          // Subtasks remain but none can execute - force-fail them
+          this.logger.error(
+            { taskId: task.id, stuckCount: pendingSubtasks.length },
+            'Subtasks stuck with unresolvable dependencies, failing them'
+          );
+          for (const stuck of pendingSubtasks) {
+            const stuckResult: SubtaskResult = {
+              subtaskId: stuck.id,
+              success: false,
+              error: 'Unresolvable dependencies',
+              executionMs: 0
+            };
+            await this.memory.storeResult(task.id, stuckResult);
+            await this.memory.updateSubtaskStatus(stuck.id, 'failed', { error: 'Unresolvable dependencies' });
+            failedSubtasks.push(stuck);
+          }
+          pendingSubtasks = [];
+        }
         break;
       }
 
@@ -374,6 +471,7 @@ export class Orchestrator {
                 await this.memory.storeResult(task.id, result);
                 await this.memory.updateSubtaskStatus(subtask.id, 'failed', { error: result.error });
                 pendingSubtasks = pendingSubtasks.filter((s) => s.id !== subtask.id);
+                failedSubtasks.push(subtask); // Track for dependency resolution
               }
               break;
 
@@ -420,6 +518,7 @@ export class Orchestrator {
               await this.memory.storeResult(task.id, result);
               await this.memory.updateSubtaskStatus(subtask.id, 'failed', { error: result.error });
               pendingSubtasks = pendingSubtasks.filter((s) => s.id !== subtask.id);
+              failedSubtasks.push(subtask); // Track for dependency resolution
               break;
           }
         }
@@ -453,15 +552,35 @@ export class Orchestrator {
   }
 
   /**
-   * Build execution batches from subtasks based on dependencies
+   * Build execution batches from subtasks based on dependencies, handling failed dependencies
    * @param subtasks - Subtasks to schedule
-   * @param alreadyCompleted - IDs of subtasks that have already completed (for dependency resolution)
+   * @param alreadyCompleted - IDs of subtasks that have already completed
+   * @param alreadyFailed - IDs of subtasks that have failed
    */
-  private buildExecutionBatches(subtasks: Subtask[], alreadyCompleted: Set<string> = new Set()): Subtask[][] {
+  private buildExecutionBatchesWithFailureHandling(
+    subtasks: Subtask[],
+    alreadyCompleted: Set<string> = new Set(),
+    alreadyFailed: Set<string> = new Set()
+  ): { batches: Subtask[][]; blockedByFailure: Subtask[] } {
     const batches: Subtask[][] = [];
-    const completed = new Set<string>(alreadyCompleted); // Start with already-completed subtasks
+    const completed = new Set<string>(alreadyCompleted);
     const remaining = new Map(subtasks.map((s) => [s.id, s]));
+    const blockedByFailure: Subtask[] = [];
 
+    // First pass: identify subtasks blocked by failed dependencies
+    for (const [, subtask] of remaining) {
+      const hasFailedDep = subtask.dependencies.some((dep) => alreadyFailed.has(dep));
+      if (hasFailedDep) {
+        blockedByFailure.push(subtask);
+      }
+    }
+
+    // Remove blocked subtasks from remaining
+    for (const blocked of blockedByFailure) {
+      remaining.delete(blocked.id);
+    }
+
+    // Build batches from remaining subtasks
     while (remaining.size > 0) {
       const batch: Subtask[] = [];
 
@@ -473,19 +592,109 @@ export class Orchestrator {
       }
 
       if (batch.length === 0 && remaining.size > 0) {
-        this.logger.error('Circular dependency or missing subtasks detected');
-        throw new Error('Cannot resolve subtask dependencies');
+        // This shouldn't happen after filtering blocked, but handle gracefully
+        this.logger.error({ remaining: remaining.size }, 'Circular dependency detected');
+        break;
       }
 
-      batches.push(batch);
+      if (batch.length > 0) {
+        batches.push(batch);
 
-      for (const subtask of batch) {
-        completed.add(subtask.id);
-        remaining.delete(subtask.id);
+        for (const subtask of batch) {
+          completed.add(subtask.id);
+          remaining.delete(subtask.id);
+        }
       }
     }
 
-    return batches;
+    return { batches, blockedByFailure };
+  }
+
+  /**
+   * Find which failed subtask is blocking the most work
+   */
+  private findBlockingFailure(blockedSubtasks: Subtask[], failedSubtasks: Subtask[]): string | null {
+    const failedIds = new Set(failedSubtasks.map((s) => s.id));
+
+    // Count how many blocked subtasks each failure is responsible for
+    const blockCounts = new Map<string, number>();
+    for (const blocked of blockedSubtasks) {
+      for (const dep of blocked.dependencies) {
+        if (failedIds.has(dep)) {
+          blockCounts.set(dep, (blockCounts.get(dep) ?? 0) + 1);
+        }
+      }
+    }
+
+    if (blockCounts.size === 0) return null;
+
+    // Return the failure blocking the most subtasks
+    let maxId: string | null = null;
+    let maxCount = 0;
+    for (const [id, count] of blockCounts) {
+      if (count > maxCount) {
+        maxId = id;
+        maxCount = count;
+      }
+    }
+
+    return maxId;
+  }
+
+  /**
+   * Create a subtask to fix a failed subtask's errors and unblock dependents
+   */
+  private async createFixSubtask(
+    task: Task,
+    errorMessage: string,
+    failedSubtask: Subtask
+  ): Promise<Subtask | null> {
+    this.logger.info(
+      { taskId: task.id, failedSubtaskId: failedSubtask.id, agentType: failedSubtask.agentType },
+      'Creating fix subtask'
+    );
+
+    try {
+      const isBuilder = failedSubtask.agentType === 'builder';
+      const fixAgentType = isBuilder ? 'builder' : failedSubtask.agentType;
+
+      const fixDescription = `${isBuilder ? 'Fix build errors and retry build' : 'Fix the errors from a previous failed subtask and complete the work'}.
+
+ORIGINAL TASK THAT FAILED:
+${failedSubtask.description}
+
+ERROR MESSAGE:
+${errorMessage}
+
+Your job:
+1. Analyze the error carefully
+2. Identify the root cause (missing dependencies, wrong plugin IDs, syntax errors, incorrect logic, etc.)
+3. Read the relevant files to understand the current state
+4. Fix the configuration files or source code that caused the error
+5. ${isBuilder ? 'Run the build again to verify the fix works' : 'Verify the fix resolves the issue'}
+
+IMPORTANT: Do NOT just retry the same operation - you MUST fix the underlying issue first.
+If the error is unclear, use web_search to find solutions for the specific error message.`;
+
+      const fixSubtask = await this.memory.createSubtask({
+        parentTaskId: task.id,
+        description: fixDescription,
+        agentType: fixAgentType,
+        dependencies: [], // No dependencies - runs immediately
+        status: 'pending',
+        maxAttempts: 3
+      });
+
+      this.logger.info(
+        { taskId: task.id, fixSubtaskId: fixSubtask.id, originalSubtaskId: failedSubtask.id },
+        'Created fix subtask'
+      );
+
+      return fixSubtask;
+    } catch (error) {
+      this.logger.error({ taskId: task.id, error: String(error) }, 'Failed to create fix subtask');
+      return null;
+    }
   }
 
   /**

@@ -38,11 +38,20 @@ export declare class Orchestrator {
      */
     private executeSubtasks;
     /**
-     * Build execution batches from subtasks based on dependencies
+     * Build execution batches from subtasks based on dependencies, handling failed dependencies
      * @param subtasks - Subtasks to schedule
-     * @param alreadyCompleted - IDs of subtasks that have already completed (for dependency resolution)
+     * @param alreadyCompleted - IDs of subtasks that have already completed
+     * @param alreadyFailed - IDs of subtasks that have failed
      */
-    private buildExecutionBatches;
+    private buildExecutionBatchesWithFailureHandling;
+    /**
+     * Find which failed subtask is blocking the most work
+     */
+    private findBlockingFailure;
+    /**
+     * Create a subtask to fix a failed subtask's errors and unblock dependents
+     */
+    private createFixSubtask;
     /**
      * Get current task progress
      */

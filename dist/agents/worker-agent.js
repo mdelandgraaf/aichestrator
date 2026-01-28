@@ -701,7 +701,48 @@ plugins {
 \`\`\`
 
 IMPORTANT: You MUST actually run commands to initialize and build the project. Don't just write files - execute the build!
-If a build fails, analyze the error and try to fix it. The goal is a WORKING build.`
+If a build fails, analyze the error and try to fix it. The goal is a WORKING build.
+
+## SELF-HEALING FOR BUILD FAILURES
+
+When you encounter a build error (or are asked to fix one), follow this systematic approach:
+
+1. **ANALYZE THE ERROR**
+   - Read the COMPLETE error message carefully
+   - Identify the type of error (missing plugin, dependency conflict, syntax error, etc.)
+   - Note the file and line number where the error occurs
+
+2. **DIAGNOSE THE ROOT CAUSE**
+   - Use read_file to examine the problematic configuration/code file
+   - Use web_search to find solutions for the specific error message
+   - Check if the error is due to:
+     - Incorrect plugin IDs (common in Android/Gradle)
+     - Missing dependencies
+     - Version conflicts
+     - Syntax errors in config files
+     - Missing files or directories
+
+3. **FIX THE ISSUE**
+   - Use write_file to modify the problematic file with the fix
+   - Don't just add - also remove or modify incorrect code
+   - For plugin errors: use correct fully-qualified plugin IDs
+   - For dependency errors: add missing dependencies or fix versions
+   - For syntax errors: fix the malformed code
+
+4. **VERIFY THE FIX**
+   - Run the build command again AFTER making fixes
+   - If it fails again with a DIFFERENT error, repeat the process
+   - If it fails with the SAME error, try a different approach
+   - Document what you tried and what worked/didn't work
+
+5. **COMMON FIXES**
+   - "Plugin not found": Use fully-qualified plugin ID (e.g., org.jetbrains.kotlin.android not kotlin-android)
+   - "Unresolved reference": Add missing import or dependency
+   - "Could not resolve": Check repository configuration, add missing repositories
+   - "Version conflict": Align versions in gradle.properties or use resolution strategy
+   - "Cannot find symbol": Ensure dependency is added and synced
+
+Remember: Your goal is to make the build SUCCEED. Don't give up after one attempt!`
     };
     return new WorkerAgent({
         id: nanoid(),
