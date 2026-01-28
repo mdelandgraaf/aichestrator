@@ -358,11 +358,19 @@ export class WorkerAgent extends BaseAgent {
         case 'run_command': {
           const command = input['command'] as string;
           const cwd = input['cwd'] ? resolve(basePath, input['cwd'] as string) : basePath;
-          // Limit dangerous commands
-          if (command.includes('rm -rf') || command.includes('sudo')) {
-            return { content: 'Command not allowed for safety reasons', isError: true };
+          const allowInstall = process.env['ALLOW_INSTALL'] === '1';
+
+          // Always block destructive commands
+          if (command.includes('rm -rf /') || command.includes('rm -rf ~')) {
+            return { content: 'Command not allowed: destructive system-wide operations are blocked', isError: true };
           }
-          const output = execSync(command, { cwd, timeout: 30000, encoding: 'utf-8', maxBuffer: 1024 * 1024 });
+
+          // Block sudo unless --allow-install is enabled
+          if (command.includes('sudo') && !allowInstall) {
+            return { content: 'Command not allowed: sudo requires --allow-install flag', isError: true };
+          }
+
+          const output = execSync(command, { cwd, timeout: 60000, encoding: 'utf-8', maxBuffer: 1024 * 1024 });
           return { content: output.substring(0, 10000), isError: false };
         }
 

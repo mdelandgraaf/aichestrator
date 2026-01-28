@@ -41,6 +41,7 @@ export interface WorkerPoolConfig {
   redisUrl: string;
   apiKey: string;
   model: string;
+  allowInstall: boolean;
 }
 
 export class WorkerPool extends EventEmitter {
@@ -170,7 +171,8 @@ export class WorkerPool extends EventEmitter {
         ANTHROPIC_API_KEY: this.config.apiKey,
         ANTHROPIC_MODEL: this.config.model,
         TIMEOUT_MS: String(this.config.workerTimeoutMs),
-        HEARTBEAT_INTERVAL_MS: String(this.config.heartbeatIntervalMs)
+        HEARTBEAT_INTERVAL_MS: String(this.config.heartbeatIntervalMs),
+        ALLOW_INSTALL: this.config.allowInstall ? '1' : '0'
       },
       stdio: ['pipe', 'pipe', 'pipe', 'ipc']
     });

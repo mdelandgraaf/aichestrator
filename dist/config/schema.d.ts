@@ -245,18 +245,21 @@ export declare const ConfigSchema: z.ZodObject<{
         heartbeatIntervalMs: z.ZodDefault<z.ZodNumber>;
         heartbeatTimeoutMs: z.ZodDefault<z.ZodNumber>;
         maxRetries: z.ZodDefault<z.ZodNumber>;
+        allowInstall: z.ZodDefault<z.ZodBoolean>;
     }, "strip", z.ZodTypeAny, {
         maxWorkers: number;
         defaultTimeoutMs: number;
         heartbeatIntervalMs: number;
         heartbeatTimeoutMs: number;
         maxRetries: number;
+        allowInstall: boolean;
     }, {
         maxWorkers?: number | undefined;
         defaultTimeoutMs?: number | undefined;
         heartbeatIntervalMs?: number | undefined;
         heartbeatTimeoutMs?: number | undefined;
         maxRetries?: number | undefined;
+        allowInstall?: boolean | undefined;
     }>;
     logLevel: z.ZodDefault<z.ZodEnum<["trace", "debug", "info", "warn", "error", "fatal"]>>;
 }, "strip", z.ZodTypeAny, {
@@ -273,6 +276,7 @@ export declare const ConfigSchema: z.ZodObject<{
         heartbeatIntervalMs: number;
         heartbeatTimeoutMs: number;
         maxRetries: number;
+        allowInstall: boolean;
     };
     logLevel: "error" | "trace" | "debug" | "info" | "warn" | "fatal";
 }, {
@@ -289,6 +293,7 @@ export declare const ConfigSchema: z.ZodObject<{
         heartbeatIntervalMs?: number | undefined;
         heartbeatTimeoutMs?: number | undefined;
         maxRetries?: number | undefined;
+        allowInstall?: boolean | undefined;
     };
     logLevel?: "error" | "trace" | "debug" | "info" | "warn" | "fatal" | undefined;
 }>;

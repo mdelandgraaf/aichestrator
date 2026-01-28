@@ -117,7 +117,8 @@ export const ConfigSchema = z.object({
     defaultTimeoutMs: z.number().int().min(1000).default(300000),
     heartbeatIntervalMs: z.number().int().default(5000),
     heartbeatTimeoutMs: z.number().int().default(15000),
-    maxRetries: z.number().int().min(0).max(5).default(2)
+    maxRetries: z.number().int().min(0).max(5).default(2),
+    allowInstall: z.boolean().default(false)
   }),
   logLevel: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info')
 });

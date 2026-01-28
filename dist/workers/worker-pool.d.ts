@@ -20,6 +20,7 @@ export interface WorkerPoolConfig {
     redisUrl: string;
     apiKey: string;
     model: string;
+    allowInstall: boolean;
 }
 export declare class WorkerPool extends EventEmitter {
     private workers;

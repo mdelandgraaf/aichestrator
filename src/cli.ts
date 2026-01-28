@@ -68,6 +68,7 @@ program
   .option('-w, --max-workers <number>', 'Maximum number of parallel workers', '4')
   .option('-s, --strategy <strategy>', 'Decomposition strategy (parallel, hierarchical)', 'parallel')
   .option('--timeout <ms>', 'Timeout in milliseconds', '300000')
+  .option('--allow-install', 'Allow workers to run install commands (npm install, apt-get, etc.)')
   .option('--verbose', 'Show detailed output')
   .action(async (descriptionInput: string, options) => {
     try {
@@ -97,7 +98,11 @@ program
 
       const orchestratorConfig: OrchestratorConfig = {
         ...config,
-        decompositionStrategy: strategy
+        decompositionStrategy: strategy,
+        orchestrator: {
+          ...config.orchestrator,
+          allowInstall: !!options.allowInstall
+        }
       };
 
       // Set up log file

@@ -52,7 +52,8 @@ export class Orchestrator {
         heartbeatIntervalMs: config.orchestrator.heartbeatIntervalMs,
         redisUrl: config.redis.url,
         apiKey: config.anthropic.apiKey,
-        model: config.anthropic.model
+        model: config.anthropic.model,
+        allowInstall: config.orchestrator.allowInstall
       },
       this.memory,
       this.eventBus
