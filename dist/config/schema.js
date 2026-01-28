@@ -23,7 +23,8 @@ export const AgentTypeSchema = z.enum([
     'implementer',
     'reviewer',
     'tester',
-    'documenter'
+    'documenter',
+    'builder'
 ]);
 export const AgentStatusSchema = z.enum(['idle', 'busy', 'error', 'offline']);
 export const TaskConstraintsSchema = z.object({

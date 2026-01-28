@@ -47,7 +47,8 @@ export class ResultAggregator {
             implementer: [],
             reviewer: [],
             tester: [],
-            documenter: []
+            documenter: [],
+            builder: []
         };
         for (const result of results) {
             const subtask = subtaskMap.get(result.subtaskId);

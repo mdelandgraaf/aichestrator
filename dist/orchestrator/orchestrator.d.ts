@@ -80,7 +80,7 @@ export declare class Orchestrator {
         createdAt: number;
         updatedAt: number;
         parentTaskId: string;
-        agentType: "researcher" | "implementer" | "reviewer" | "tester" | "documenter";
+        agentType: "researcher" | "implementer" | "reviewer" | "tester" | "documenter" | "builder";
         dependencies: string[];
         attempts: number;
         maxAttempts: number;

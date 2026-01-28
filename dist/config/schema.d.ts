@@ -5,7 +5,7 @@ export declare const TaskStatusSchema: z.ZodEnum<["pending", "decomposing", "exe
 export type TaskStatus = z.infer<typeof TaskStatusSchema>;
 export declare const SubtaskStatusSchema: z.ZodEnum<["pending", "blocked", "queued", "assigned", "executing", "completed", "failed"]>;
 export type SubtaskStatus = z.infer<typeof SubtaskStatusSchema>;
-export declare const AgentTypeSchema: z.ZodEnum<["researcher", "implementer", "reviewer", "tester", "documenter"]>;
+export declare const AgentTypeSchema: z.ZodEnum<["researcher", "implementer", "reviewer", "tester", "documenter", "builder"]>;
 export type AgentType = z.infer<typeof AgentTypeSchema>;
 export declare const AgentStatusSchema: z.ZodEnum<["idle", "busy", "error", "offline"]>;
 export type AgentStatus = z.infer<typeof AgentStatusSchema>;
@@ -79,7 +79,7 @@ export declare const SubtaskSchema: z.ZodObject<{
     id: z.ZodString;
     parentTaskId: z.ZodString;
     description: z.ZodString;
-    agentType: z.ZodEnum<["researcher", "implementer", "reviewer", "tester", "documenter"]>;
+    agentType: z.ZodEnum<["researcher", "implementer", "reviewer", "tester", "documenter", "builder"]>;
     dependencies: z.ZodDefault<z.ZodArray<z.ZodString, "many">>;
     status: z.ZodEnum<["pending", "blocked", "queued", "assigned", "executing", "completed", "failed"]>;
     assignedAgentId: z.ZodOptional<z.ZodString>;
@@ -96,7 +96,7 @@ export declare const SubtaskSchema: z.ZodObject<{
     createdAt: number;
     updatedAt: number;
     parentTaskId: string;
-    agentType: "researcher" | "implementer" | "reviewer" | "tester" | "documenter";
+    agentType: "researcher" | "implementer" | "reviewer" | "tester" | "documenter" | "builder";
     dependencies: string[];
     attempts: number;
     maxAttempts: number;
@@ -110,7 +110,7 @@ export declare const SubtaskSchema: z.ZodObject<{
     createdAt: number;
     updatedAt: number;
     parentTaskId: string;
-    agentType: "researcher" | "implementer" | "reviewer" | "tester" | "documenter";
+    agentType: "researcher" | "implementer" | "reviewer" | "tester" | "documenter" | "builder";
     error?: string | undefined;
     dependencies?: string[] | undefined;
     assignedAgentId?: string | undefined;
@@ -121,7 +121,7 @@ export declare const SubtaskSchema: z.ZodObject<{
 export type Subtask = z.infer<typeof SubtaskSchema>;
 export declare const AgentEntrySchema: z.ZodObject<{
     id: z.ZodString;
-    type: z.ZodEnum<["researcher", "implementer", "reviewer", "tester", "documenter"]>;
+    type: z.ZodEnum<["researcher", "implementer", "reviewer", "tester", "documenter", "builder"]>;
     pid: z.ZodOptional<z.ZodNumber>;
     status: z.ZodEnum<["idle", "busy", "error", "offline"]>;
     currentSubtaskId: z.ZodOptional<z.ZodString>;
@@ -140,7 +140,7 @@ export declare const AgentEntrySchema: z.ZodObject<{
         avgExecutionMs?: number | undefined;
     }>;
 }, "strip", z.ZodTypeAny, {
-    type: "researcher" | "implementer" | "reviewer" | "tester" | "documenter";
+    type: "researcher" | "implementer" | "reviewer" | "tester" | "documenter" | "builder";
     status: "idle" | "busy" | "error" | "offline";
     id: string;
     lastHeartbeat: number;
@@ -152,7 +152,7 @@ export declare const AgentEntrySchema: z.ZodObject<{
     pid?: number | undefined;
     currentSubtaskId?: string | undefined;
 }, {
-    type: "researcher" | "implementer" | "reviewer" | "tester" | "documenter";
+    type: "researcher" | "implementer" | "reviewer" | "tester" | "documenter" | "builder";
     status: "idle" | "busy" | "error" | "offline";
     id: string;
     lastHeartbeat: number;
