@@ -269,6 +269,142 @@ program
     }
 });
 program
+    .command('resume')
+    .description('Resume a failed task by re-running only failed subtasks')
+    .argument('<taskId>', 'The task ID to resume')
+    .option('-p, --project <path>', 'Path to the project directory (for log file)', process.cwd())
+    .option('--timeout <ms>', 'Timeout in milliseconds', '300000')
+    .option('--verbose', 'Show detailed output')
+    .action(async (taskId, options) => {
+    try {
+        const config = loadConfig();
+        if (!config.anthropic.apiKey) {
+            console.error('❌ ANTHROPIC_API_KEY environment variable is required');
+            process.exit(1);
+        }
+        const orchestratorConfig = {
+            ...config,
+            decompositionStrategy: 'parallel'
+        };
+        // Set up log file
+        const logFile = setLogFile(options.project);
+        // Helper to log to both console and file
+        const log = (msg) => {
+            console.log(msg);
+            logToFile(msg);
+        };
+        const orchestrator = new Orchestrator(orchestratorConfig);
+        // Handle graceful shutdown
+        const shutdown = async () => {
+            log('\n⏹️  Shutting down...');
+            await orchestrator.shutdown();
+            process.exit(0);
+        };
+        process.on('SIGINT', shutdown);
+        process.on('SIGTERM', shutdown);
+        log('\n🔄 AIChestrator - Resuming Task\n');
+        log('┌─────────────────────────────────────────────────────────');
+        log(`│ 🆔 Task ID: ${taskId}`);
+        log(`│ 📝 Log file: ${logFile}`);
+        log('└─────────────────────────────────────────────────────────\n');
+        log('⏳ Initializing orchestrator...');
+        await orchestrator.initialize();
+        // Get task info
+        const task = await orchestrator.getTaskStatus(taskId);
+        if (!task) {
+            log(`❌ Task not found: ${taskId}`);
+            await orchestrator.shutdown();
+            process.exit(1);
+        }
+        log(`📋 Task: ${task.description.substring(0, 50)}...`);
+        log(`📁 Project: ${task.projectPath}`);
+        log(`🔧 Status: ${task.status}\n`);
+        // Track progress for display
+        const activeSubtasks = new Map();
+        let completedCount = 0;
+        let totalSubtasks = 0;
+        // Subscribe to progress events
+        const eventBus = orchestrator.getEventBus();
+        eventBus.on('subtask:assigned', (event) => {
+            const shortId = event.subtaskId?.substring(0, 8) ?? '?';
+            const workerId = event.agentId?.substring(0, 8) ?? '?';
+            activeSubtasks.set(event.subtaskId, { startTime: Date.now() });
+            log(`  🚀 [${shortId}] Assigned to worker ${workerId}`);
+        });
+        eventBus.on('subtask:completed', (event) => {
+            const shortId = event.subtaskId?.substring(0, 8) ?? '?';
+            const info = activeSubtasks.get(event.subtaskId);
+            const duration = info ? ((Date.now() - info.startTime) / 1000).toFixed(1) : '?';
+            activeSubtasks.delete(event.subtaskId);
+            completedCount++;
+            const status = event.success ? '✅' : '❌';
+            log(`  ${status} [${shortId}] Done in ${duration}s (${completedCount}/${totalSubtasks})`);
+        });
+        eventBus.on('task:started', (event) => {
+            totalSubtasks = event.subtaskCount ?? 0;
+            log(`📋 Resuming ${totalSubtasks} failed subtasks\n`);
+            // Show subtask list
+            orchestrator.getSubtasks(event.taskId).then((subtasks) => {
+                const failed = subtasks.filter(s => s.status === 'failed' || s.status === 'pending' || s.status === 'blocked');
+                log('Subtasks to retry:');
+                for (const st of failed) {
+                    const shortId = st.id.substring(0, 8);
+                    const desc = st.description.substring(0, 60);
+                    log(`  • [${shortId}] [${st.agentType}] ${desc}${st.description.length > 60 ? '...' : ''}`);
+                }
+                log('\nExecution:\n');
+            }).catch(() => { });
+        });
+        log('🔄 Resuming failed subtasks...\n');
+        const result = await orchestrator.resume(taskId);
+        log('\n' + '═'.repeat(60));
+        log('📊 RESULTS');
+        log('═'.repeat(60) + '\n');
+        log(`Status: ${result.status === 'completed' ? '✅ Completed' : '❌ Failed'}`);
+        log(`Duration: ${(result.totalExecutionMs / 1000).toFixed(1)}s`);
+        log(`Task ID: ${result.taskId}`);
+        log(`Log file: ${logFile}`);
+        if (result.status === 'completed' || result.status === 'failed') {
+            const output = result.output;
+            if (output?.aggregated) {
+                const agg = output.aggregated;
+                log(`\nSubtasks: ${agg.summary.total} total`);
+                log(`  ✓ Successful: ${agg.summary.successful}`);
+                log(`  ✗ Failed: ${agg.summary.failed}`);
+                if (agg.insights.length > 0) {
+                    log('\n💡 Key Insights:');
+                    for (const insight of agg.insights.slice(0, 5)) {
+                        log(`  • ${insight}`);
+                    }
+                }
+                if (agg.filesModified.length > 0) {
+                    log('\n📄 Files Affected:');
+                    for (const file of agg.filesModified.slice(0, 10)) {
+                        log(`  • ${file}`);
+                    }
+                }
+                if (options.verbose && output.summary) {
+                    log('\n' + '─'.repeat(60));
+                    log('DETAILED SUMMARY');
+                    log('─'.repeat(60));
+                    log(output.summary);
+                }
+            }
+        }
+        if (result.error) {
+            log(`\n❌ Error: ${result.error}`);
+        }
+        log('\n' + '═'.repeat(60) + '\n');
+        await orchestrator.shutdown();
+        process.exit(result.status === 'completed' ? 0 : 1);
+    }
+    catch (error) {
+        logger.error({ error: String(error) }, 'Failed to resume task');
+        console.error('\n❌ Error:', error instanceof Error ? error.message : String(error));
+        process.exit(1);
+    }
+});
+program
     .command('agents')
     .description('List all registered agents')
     .option('--json', 'Output as JSON')

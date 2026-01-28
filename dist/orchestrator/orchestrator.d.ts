@@ -99,6 +99,10 @@ export declare class Orchestrator {
         message?: string;
     }) => void): void;
     /**
+     * Resume a failed task by re-running failed subtasks
+     */
+    resume(taskId: string): Promise<TaskResult>;
+    /**
      * Shutdown the orchestrator gracefully
      */
     shutdown(): Promise<void>;

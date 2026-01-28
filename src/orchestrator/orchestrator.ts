@@ -420,6 +420,120 @@ export class Orchestrator {
   }
 
   /**
+   * Resume a failed task by re-running failed subtasks
+   */
+  async resume(taskId: string): Promise<TaskResult> {
+    if (!this.isInitialized) {
+      await this.initialize();
+    }
+
+    const startTime = Date.now();
+
+    // Get the existing task
+    const task = await this.memory.getTask(taskId);
+    if (!task) {
+      throw new TaskError(`Task not found: ${taskId}`, taskId);
+    }
+
+    this.logger.info({ taskId, status: task.status }, 'Resuming task');
+
+    // Get all subtasks
+    const allSubtasks = await this.memory.getSubtasksForTask(taskId);
+    if (allSubtasks.length === 0) {
+      throw new TaskError('No subtasks found for task', taskId);
+    }
+
+    // Find failed subtasks
+    const failedSubtasks = allSubtasks.filter(
+      (s) => s.status === 'failed' || s.status === 'pending' || s.status === 'blocked'
+    );
+
+    if (failedSubtasks.length === 0) {
+      this.logger.info({ taskId }, 'No failed subtasks to resume');
+      const aggregated = await this.aggregator.aggregate(taskId);
+      return {
+        taskId,
+        status: 'completed',
+        output: {
+          aggregated,
+          summary: this.aggregator.generateSummary(aggregated),
+          mergedOutput: this.aggregator.mergeOutputs(aggregated)
+        },
+        subtaskResults: await this.memory.getResults(taskId),
+        totalExecutionMs: Date.now() - startTime
+      };
+    }
+
+    this.logger.info(
+      { taskId, totalSubtasks: allSubtasks.length, failedCount: failedSubtasks.length },
+      'Resuming failed subtasks'
+    );
+
+    // Emit task started (for progress tracking)
+    await this.eventBus.emitTaskStarted(taskId, failedSubtasks.length);
+
+    try {
+      // Reset failed subtasks to pending
+      for (const subtask of failedSubtasks) {
+        await this.memory.updateSubtaskStatus(subtask.id, 'pending', {
+          error: undefined
+        });
+      }
+
+      // Update task status
+      await this.memory.updateTaskStatus(taskId, 'executing');
+
+      // Execute only the failed subtasks
+      await this.executeSubtasks(task, failedSubtasks);
+
+      // Aggregate all results (including previous successes)
+      await this.memory.updateTaskStatus(taskId, 'aggregating');
+      const aggregated = await this.aggregator.aggregate(taskId);
+
+      // Determine final status
+      const hasFailures = aggregated.summary.failed > 0;
+      const finalStatus = hasFailures ? 'failed' : 'completed';
+      await this.memory.updateTaskStatus(taskId, finalStatus);
+
+      const totalExecutionMs = Date.now() - startTime;
+
+      // Emit completion event
+      await this.eventBus.emitTaskCompleted(taskId, !hasFailures, totalExecutionMs);
+
+      this.logger.info(
+        { taskId, totalExecutionMs, status: finalStatus },
+        'Task resume finished'
+      );
+
+      return {
+        taskId,
+        status: finalStatus,
+        output: {
+          aggregated,
+          summary: this.aggregator.generateSummary(aggregated),
+          mergedOutput: this.aggregator.mergeOutputs(aggregated)
+        },
+        subtaskResults: await this.memory.getResults(taskId),
+        totalExecutionMs
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      await this.memory.updateTaskStatus(taskId, 'failed', errorMessage);
+      await this.eventBus.emitTaskFailed(taskId, errorMessage);
+
+      this.logger.error({ taskId, error: errorMessage }, 'Task resume failed');
+
+      return {
+        taskId,
+        status: 'failed',
+        subtaskResults: await this.memory.getResults(taskId),
+        totalExecutionMs: Date.now() - startTime,
+        error: errorMessage
+      };
+    }
+  }
+
+  /**
    * Shutdown the orchestrator gracefully
    */
   async shutdown(): Promise<void> {
