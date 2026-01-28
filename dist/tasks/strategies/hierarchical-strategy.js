@@ -19,7 +19,9 @@ export class HierarchicalStrategy extends BaseDecompositionStrategy {
         this.maxDepth = maxDepth;
         this.logger = createLogger('hierarchical-strategy');
     }
-    async decompose(task) {
+    async decompose(task, _resumeContext) {
+        // Note: hierarchical strategy doesn't yet support resume context
+        // Falls back to full re-decomposition
         this.logger.info({ taskId: task.id }, 'Decomposing with hierarchical strategy');
         // First, get the high-level phases
         const phases = await this.decomposeIntoPhases(task);

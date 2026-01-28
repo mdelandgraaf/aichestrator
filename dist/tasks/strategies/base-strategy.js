@@ -5,9 +5,12 @@ export class BaseDecompositionStrategy {
     /**
      * Validate decomposition results
      */
-    validateResults(results) {
-        if (results.length === 0) {
+    validateResults(results, allowEmpty = false) {
+        if (results.length === 0 && !allowEmpty) {
             throw new Error('Decomposition produced no subtasks');
+        }
+        if (results.length === 0) {
+            return; // Empty is allowed for resume when all work is done
         }
         // Check for invalid dependency references
         for (let i = 0; i < results.length; i++) {

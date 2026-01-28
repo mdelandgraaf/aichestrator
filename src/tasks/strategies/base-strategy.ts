@@ -8,9 +8,27 @@ export interface DecompositionResult {
   estimatedComplexity?: number;
 }
 
+export interface CompletedWork {
+  description: string;
+  agentType: AgentType;
+  output?: string;
+  filesCreated?: string[];
+}
+
+export interface FailedWork {
+  description: string;
+  agentType: AgentType;
+  error?: string;
+}
+
+export interface ResumeContext {
+  completedWork: CompletedWork[];
+  failedWork: FailedWork[];
+}
+
 export interface DecompositionStrategy {
   name: string;
-  decompose(task: Task): Promise<DecompositionResult[]>;
+  decompose(task: Task, resumeContext?: ResumeContext): Promise<DecompositionResult[]>;
 }
 
 /**
@@ -18,14 +36,17 @@ export interface DecompositionStrategy {
  */
 export abstract class BaseDecompositionStrategy implements DecompositionStrategy {
   abstract name: string;
-  abstract decompose(task: Task): Promise<DecompositionResult[]>;
+  abstract decompose(task: Task, resumeContext?: ResumeContext): Promise<DecompositionResult[]>;
 
   /**
    * Validate decomposition results
    */
-  protected validateResults(results: DecompositionResult[]): void {
-    if (results.length === 0) {
+  protected validateResults(results: DecompositionResult[], allowEmpty: boolean = false): void {
+    if (results.length === 0 && !allowEmpty) {
       throw new Error('Decomposition produced no subtasks');
+    }
+    if (results.length === 0) {
+      return; // Empty is allowed for resume when all work is done
     }
 
     // Check for invalid dependency references

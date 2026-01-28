@@ -203,11 +203,12 @@ export class Orchestrator {
         return subtasks;
     }
     /**
-     * Execute subtasks respecting dependencies
+     * Execute subtasks respecting dependencies with auto-retry
      */
     async executeSubtasks(task, subtasks) {
         const batches = this.buildExecutionBatches(subtasks);
-        this.logger.info({ taskId: task.id, batchCount: batches.length }, 'Executing in batches');
+        const maxRetries = this.config.orchestrator.maxRetries ?? 2;
+        this.logger.info({ taskId: task.id, batchCount: batches.length, maxRetries }, 'Executing in batches');
         for (let i = 0; i < batches.length; i++) {
             const batch = batches[i];
             this.logger.info({ taskId: task.id, batch: i + 1, count: batch.length }, 'Starting batch');
@@ -216,18 +217,47 @@ export class Orchestrator {
                 subtask,
                 taskId: task.id
             }));
-            const results = await this.workerPool.executeAll(items);
-            // Store results
+            let results = await this.workerPool.executeAll(items);
+            // Retry failed subtasks automatically
+            let failedResults = results.filter((r) => !r.success);
+            let retryCount = 0;
+            while (failedResults.length > 0 && retryCount < maxRetries) {
+                retryCount++;
+                this.logger.info({ taskId: task.id, failedCount: failedResults.length, retry: retryCount, maxRetries }, 'Retrying failed subtasks');
+                // Get the failed subtasks
+                const failedSubtaskIds = new Set(failedResults.map((r) => r.subtaskId));
+                const failedSubtasks = batch.filter((s) => failedSubtaskIds.has(s.id));
+                // Update subtask status back to pending for retry
+                for (const subtask of failedSubtasks) {
+                    await this.memory.updateSubtaskStatus(subtask.id, 'pending');
+                }
+                // Wait before retrying (exponential backoff)
+                await new Promise((resolve) => setTimeout(resolve, 1000 * retryCount));
+                const retryItems = failedSubtasks.map((subtask) => ({
+                    subtask,
+                    taskId: task.id
+                }));
+                const retryResults = await this.workerPool.executeAll(retryItems);
+                // Update the main results with retry results
+                for (const retryResult of retryResults) {
+                    const idx = results.findIndex((r) => r.subtaskId === retryResult.subtaskId);
+                    if (idx >= 0) {
+                        results[idx] = retryResult;
+                    }
+                }
+                failedResults = results.filter((r) => !r.success);
+            }
+            // Store final results
             for (const result of results) {
                 await this.memory.storeResult(task.id, result);
             }
             // Report progress
             const progress = await this.getProgress(task.id, subtasks.length);
             await this.eventBus.emitTaskProgress(task.id, 'executing', progress.completed, progress.total);
-            // Check if we should continue
-            const failedCount = results.filter((r) => !r.success).length;
-            if (failedCount > 0) {
-                this.logger.warn({ taskId: task.id, failedCount }, 'Some subtasks failed');
+            // Log any remaining failures after retries
+            const finalFailedCount = results.filter((r) => !r.success).length;
+            if (finalFailedCount > 0) {
+                this.logger.warn({ taskId: task.id, failedCount: finalFailedCount, retriesAttempted: retryCount }, 'Some subtasks failed after retries');
             }
         }
     }
@@ -306,7 +336,7 @@ export class Orchestrator {
         });
     }
     /**
-     * Resume a failed task by re-running failed subtasks
+     * Resume a failed task by analyzing progress and re-decomposing for remaining work
      */
     async resume(taskId) {
         if (!this.isInitialized) {
@@ -319,15 +349,41 @@ export class Orchestrator {
             throw new TaskError(`Task not found: ${taskId}`, taskId);
         }
         this.logger.info({ taskId, status: task.status }, 'Resuming task');
-        // Get all subtasks
+        // Get all subtasks and results
         const allSubtasks = await this.memory.getSubtasksForTask(taskId);
-        if (allSubtasks.length === 0) {
-            throw new TaskError('No subtasks found for task', taskId);
+        const existingResults = await this.memory.getResults(taskId);
+        // Build context about completed and failed work
+        const completedWork = [];
+        const failedWork = [];
+        for (const subtask of allSubtasks) {
+            const result = existingResults.find((r) => r.subtaskId === subtask.id);
+            if (subtask.status === 'completed' && result?.success) {
+                // Extract files created from output (output is unknown, so type guard needed)
+                const outputStr = typeof result.output === 'string' ? result.output : undefined;
+                const filesMatch = outputStr?.match(/Files created\/modified:\n([\s\S]*?)(?:\n\n|$)/);
+                const filesCreated = filesMatch
+                    ? filesMatch[1]?.split('\n').filter(Boolean)
+                    : undefined;
+                completedWork.push({
+                    description: subtask.description,
+                    agentType: subtask.agentType,
+                    output: outputStr,
+                    filesCreated
+                });
+            }
+            else if (subtask.status === 'failed' || (result && !result.success)) {
+                const errorStr = result?.error ?? subtask.error;
+                failedWork.push({
+                    description: subtask.description,
+                    agentType: subtask.agentType,
+                    error: typeof errorStr === 'string' ? errorStr : undefined
+                });
+            }
         }
-        // Find failed subtasks
-        const failedSubtasks = allSubtasks.filter((s) => s.status === 'failed' || s.status === 'pending' || s.status === 'blocked');
-        if (failedSubtasks.length === 0) {
-            this.logger.info({ taskId }, 'No failed subtasks to resume');
+        this.logger.info({ taskId, completed: completedWork.length, failed: failedWork.length }, 'Analyzed previous progress');
+        // If nothing failed and everything is completed, we're done
+        if (failedWork.length === 0 && completedWork.length === allSubtasks.length) {
+            this.logger.info({ taskId }, 'Task already completed');
             const aggregated = await this.aggregator.aggregate(taskId);
             return {
                 taskId,
@@ -337,24 +393,44 @@ export class Orchestrator {
                     summary: this.aggregator.generateSummary(aggregated),
                     mergedOutput: this.aggregator.mergeOutputs(aggregated)
                 },
-                subtaskResults: await this.memory.getResults(taskId),
+                subtaskResults: existingResults,
                 totalExecutionMs: Date.now() - startTime
             };
         }
-        this.logger.info({ taskId, totalSubtasks: allSubtasks.length, failedCount: failedSubtasks.length }, 'Resuming failed subtasks');
-        // Emit task started (for progress tracking)
-        await this.eventBus.emitTaskStarted(taskId, failedSubtasks.length);
         try {
-            // Reset failed subtasks to pending
-            for (const subtask of failedSubtasks) {
-                await this.memory.updateSubtaskStatus(subtask.id, 'pending', {
-                    error: undefined
-                });
+            // Re-decompose with context about completed/failed work
+            await this.memory.updateTaskStatus(taskId, 'decomposing');
+            const resumeContext = { completedWork, failedWork };
+            const strategyType = this.config.decompositionStrategy ?? 'parallel';
+            const strategy = createStrategy(strategyType, this.config.anthropic.apiKey, this.config.anthropic.model);
+            this.logger.info({ taskId, strategy: strategyType }, 'Re-decomposing task with context');
+            const newDecomposition = await strategy.decompose(task, resumeContext);
+            // If decomposition returns empty, task is complete
+            if (newDecomposition.length === 0) {
+                this.logger.info({ taskId }, 'No additional work needed');
+                await this.memory.updateTaskStatus(taskId, 'completed');
+                const aggregated = await this.aggregator.aggregate(taskId);
+                return {
+                    taskId,
+                    status: 'completed',
+                    output: {
+                        aggregated,
+                        summary: this.aggregator.generateSummary(aggregated),
+                        mergedOutput: this.aggregator.mergeOutputs(aggregated)
+                    },
+                    subtaskResults: existingResults,
+                    totalExecutionMs: Date.now() - startTime
+                };
             }
+            // Create new subtasks for remaining work
+            const newSubtasks = await this.createSubtasksFromDecomposition(taskId, newDecomposition);
+            this.logger.info({ taskId, newSubtaskCount: newSubtasks.length }, 'Created new subtasks for remaining work');
+            // Emit task started (for progress tracking)
+            await this.eventBus.emitTaskStarted(taskId, newSubtasks.length);
             // Update task status
             await this.memory.updateTaskStatus(taskId, 'executing');
-            // Execute only the failed subtasks
-            await this.executeSubtasks(task, failedSubtasks);
+            // Execute the new subtasks
+            await this.executeSubtasks(task, newSubtasks);
             // Aggregate all results (including previous successes)
             await this.memory.updateTaskStatus(taskId, 'aggregating');
             const aggregated = await this.aggregator.aggregate(taskId);

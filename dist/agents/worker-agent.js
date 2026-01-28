@@ -1,11 +1,50 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { nanoid } from 'nanoid';
 import { execSync } from 'child_process';
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import { dirname, resolve } from 'path';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } from 'fs';
+import { dirname, resolve, join } from 'path';
 import { BaseAgent } from './base-agent.js';
 import { createLogger } from '../utils/logger.js';
 import { AgentError, TimeoutError } from '../utils/errors.js';
+/**
+ * Read CLAUDE.md from a project directory if it exists
+ */
+function readClaudeMd(projectPath) {
+    const claudeMdPath = join(projectPath, 'CLAUDE.md');
+    if (existsSync(claudeMdPath)) {
+        try {
+            return readFileSync(claudeMdPath, 'utf-8');
+        }
+        catch {
+            return null;
+        }
+    }
+    return null;
+}
+/**
+ * Update the shared status file with worker progress
+ */
+function updateStatusFile(projectPath, workerId, agentType, status, description, details) {
+    const statusDir = join(projectPath, '.aichestrator');
+    const statusFile = join(statusDir, 'status.md');
+    if (!existsSync(statusDir)) {
+        mkdirSync(statusDir, { recursive: true });
+    }
+    const timestamp = new Date().toISOString();
+    const statusEmoji = status === 'completed' ? '✅' : status === 'failed' ? '❌' : '🚀';
+    let entry = `\n### ${statusEmoji} [${timestamp}] ${agentType.toUpperCase()} (${workerId.substring(0, 8)})\n`;
+    entry += `**Status:** ${status}\n`;
+    entry += `**Task:** ${description}\n`;
+    if (details) {
+        entry += `**Details:**\n${details}\n`;
+    }
+    entry += `---\n`;
+    // Initialize file if it doesn't exist
+    if (!existsSync(statusFile)) {
+        writeFileSync(statusFile, `# AIChestrator Status Report\n\nThis file tracks the progress of all worker agents.\n\n---\n`);
+    }
+    appendFileSync(statusFile, entry);
+}
 // Tool definitions for Claude
 const TOOLS = [
     {
@@ -96,8 +135,13 @@ export class WorkerAgent extends BaseAgent {
         try {
             // Get shared context from other agents
             const context = await this.memory.getContext(subtask.parentTaskId);
+            const projectPath = context?.projectPath ?? process.cwd();
+            // Read CLAUDE.md for extra project context
+            const claudeMdContent = readClaudeMd(projectPath);
+            // Update status file - started
+            updateStatusFile(projectPath, this.config.id, this.config.type, 'started', subtask.description);
             // Build the prompt with context
-            const prompt = this.buildPrompt(subtask, context);
+            const prompt = this.buildPrompt(subtask, context, claudeMdContent);
             yield this.createProgress('thinking', 'Analyzing task...');
             // Create timeout promise
             const createTimeout = () => new Promise((_, reject) => {
@@ -177,6 +221,9 @@ export class WorkerAgent extends BaseAgent {
             yield this.createProgress('complete', `Task completed. Files modified: ${filesModified.length}`);
             const executionMs = Date.now() - startTime;
             this.logger.info({ subtaskId: subtask.id, executionMs, filesModified: filesModified.length }, 'Subtask completed');
+            // Update status file - completed
+            const summaryLines = output.split('\n').slice(0, 5).join('\n');
+            updateStatusFile(projectPath, this.config.id, this.config.type, 'completed', subtask.description, `Duration: ${(executionMs / 1000).toFixed(1)}s\nFiles: ${filesModified.join(', ') || 'none'}\nSummary:\n${summaryLines}`);
             return {
                 subtaskId: subtask.id,
                 success: true,
@@ -189,6 +236,9 @@ export class WorkerAgent extends BaseAgent {
             const errorMessage = error instanceof Error ? error.message : String(error);
             this.logger.error({ subtaskId: subtask.id, error: errorMessage }, 'Subtask failed');
             yield this.createProgress('error', errorMessage);
+            // Update status file - failed
+            const projectPath = (await this.memory.getContext(subtask.parentTaskId))?.projectPath ?? process.cwd();
+            updateStatusFile(projectPath, this.config.id, this.config.type, 'failed', subtask.description, `Duration: ${(executionMs / 1000).toFixed(1)}s\nError: ${errorMessage}`);
             return {
                 subtaskId: subtask.id,
                 success: false,
@@ -325,8 +375,13 @@ export class WorkerAgent extends BaseAgent {
             return { content: `Tool error: ${msg}`, isError: true };
         }
     }
-    buildPrompt(subtask, context) {
-        let prompt = `## Task\n${subtask.description}\n\n`;
+    buildPrompt(subtask, context, claudeMdContent) {
+        let prompt = '';
+        // Include CLAUDE.md content for project context
+        if (claudeMdContent) {
+            prompt += `## Project Context (from CLAUDE.md)\n${claudeMdContent}\n\n`;
+        }
+        prompt += `## Task\n${subtask.description}\n\n`;
         if (context && context.discoveries.length > 0) {
             prompt += `## Context from other agents\n`;
             prompt += `Project path: ${context.projectPath}\n\n`;

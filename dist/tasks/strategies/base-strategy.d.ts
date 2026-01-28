@@ -6,20 +6,35 @@ export interface DecompositionResult {
     priority?: number;
     estimatedComplexity?: number;
 }
+export interface CompletedWork {
+    description: string;
+    agentType: AgentType;
+    output?: string;
+    filesCreated?: string[];
+}
+export interface FailedWork {
+    description: string;
+    agentType: AgentType;
+    error?: string;
+}
+export interface ResumeContext {
+    completedWork: CompletedWork[];
+    failedWork: FailedWork[];
+}
 export interface DecompositionStrategy {
     name: string;
-    decompose(task: Task): Promise<DecompositionResult[]>;
+    decompose(task: Task, resumeContext?: ResumeContext): Promise<DecompositionResult[]>;
 }
 /**
  * Base class for decomposition strategies
  */
 export declare abstract class BaseDecompositionStrategy implements DecompositionStrategy {
     abstract name: string;
-    abstract decompose(task: Task): Promise<DecompositionResult[]>;
+    abstract decompose(task: Task, resumeContext?: ResumeContext): Promise<DecompositionResult[]>;
     /**
      * Validate decomposition results
      */
-    protected validateResults(results: DecompositionResult[]): void;
+    protected validateResults(results: DecompositionResult[], allowEmpty?: boolean): void;
     /**
      * Check for circular dependencies using DFS
      */

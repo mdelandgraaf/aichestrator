@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { Task, AgentTypeSchema } from '../../config/schema.js';
-import { BaseDecompositionStrategy, DecompositionResult } from './base-strategy.js';
+import { BaseDecompositionStrategy, DecompositionResult, ResumeContext } from './base-strategy.js';
 import { createLogger, Logger } from '../../utils/logger.js';
 
 interface HierarchicalNode {
@@ -29,7 +29,9 @@ export class HierarchicalStrategy extends BaseDecompositionStrategy {
     this.logger = createLogger('hierarchical-strategy');
   }
 
-  async decompose(task: Task): Promise<DecompositionResult[]> {
+  async decompose(task: Task, _resumeContext?: ResumeContext): Promise<DecompositionResult[]> {
+    // Note: hierarchical strategy doesn't yet support resume context
+    // Falls back to full re-decomposition
     this.logger.info({ taskId: task.id }, 'Decomposing with hierarchical strategy');
 
     // First, get the high-level phases

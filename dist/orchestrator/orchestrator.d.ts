@@ -33,7 +33,7 @@ export declare class Orchestrator {
      */
     private createSubtasksFromDecomposition;
     /**
-     * Execute subtasks respecting dependencies
+     * Execute subtasks respecting dependencies with auto-retry
      */
     private executeSubtasks;
     /**
@@ -99,7 +99,7 @@ export declare class Orchestrator {
         message?: string;
     }) => void): void;
     /**
-     * Resume a failed task by re-running failed subtasks
+     * Resume a failed task by analyzing progress and re-decomposing for remaining work
      */
     resume(taskId: string): Promise<TaskResult>;
     /**

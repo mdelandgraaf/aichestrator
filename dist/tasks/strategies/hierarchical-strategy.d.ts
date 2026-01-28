@@ -1,5 +1,5 @@
 import { Task } from '../../config/schema.js';
-import { BaseDecompositionStrategy, DecompositionResult } from './base-strategy.js';
+import { BaseDecompositionStrategy, DecompositionResult, ResumeContext } from './base-strategy.js';
 /**
  * Hierarchical decomposition strategy
  * Breaks tasks into a tree structure, then flattens with proper dependencies
@@ -11,7 +11,7 @@ export declare class HierarchicalStrategy extends BaseDecompositionStrategy {
     private logger;
     private maxDepth;
     constructor(apiKey: string, model: string, maxDepth?: number);
-    decompose(task: Task): Promise<DecompositionResult[]>;
+    decompose(task: Task, _resumeContext?: ResumeContext): Promise<DecompositionResult[]>;
     private decomposeIntoPhases;
     private expandPhase;
     private parsePhases;
