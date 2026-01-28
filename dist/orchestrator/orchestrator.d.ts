@@ -108,8 +108,13 @@ export declare class Orchestrator {
         type: string;
         subtaskId?: string;
         workerId?: string;
+        stage?: string;
         message?: string;
     }) => void): void;
+    /**
+     * Cancel a specific worker's current task
+     */
+    cancelWorker(workerId: string): boolean;
     /**
      * Resume a failed task by analyzing progress and re-decomposing for remaining work
      */

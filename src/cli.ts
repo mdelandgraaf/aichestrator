@@ -11,6 +11,7 @@ import { AggregatedResult } from './orchestrator/aggregator.js';
 import { createLogger, setLogFile, logToFile } from './utils/logger.js';
 import { TaskTypeSchema } from './config/schema.js';
 import { StrategyType } from './tasks/strategies/index.js';
+import { launchTUI } from './tui/index.js';
 
 // Increase max listeners to accommodate multiple Redis connections
 // (each SharedMemory creates 2 Redis connections that add exit handlers)
@@ -73,6 +74,7 @@ program
   .option('-s, --strategy <strategy>', 'Decomposition strategy (parallel, hierarchical)', 'parallel')
   .option('--timeout <ms>', 'Timeout in milliseconds', '300000')
   .option('--allow-install', 'Allow workers to run install commands (npm install, apt-get, etc.)')
+  .option('--no-tui', 'Disable interactive TUI dashboard')
   .option('--verbose', 'Show detailed output')
   .action(async (descriptionInput: string, options) => {
     try {
@@ -133,61 +135,76 @@ program
       // Show first line or truncated description for display
       const displayDesc = description.split('\n')[0]?.substring(0, 50) ?? description.substring(0, 50);
 
-      log('\n🤖 AIChestrator - Multi-Agent Task Execution\n');
-      log('┌─────────────────────────────────────────────────────────');
-      log(`│ 📋 Task: ${displayDesc}${description.length > 50 ? '...' : ''}`);
-      log(`│ 📁 Project: ${options.project}`);
-      log(`│ 🔧 Type: ${options.type}`);
-      log(`│ 🧠 Strategy: ${strategy}`);
-      log(`│ 👥 Max Workers: ${options.maxWorkers}`);
-      log(`│ 📝 Log file: ${logFile}`);
-      log('└─────────────────────────────────────────────────────────\n');
+      // Determine if TUI should be used
+      const useTUI = options.tui !== false && process.stdout.isTTY;
 
-      log('⏳ Initializing orchestrator...');
+      if (!useTUI) {
+        log('\n🤖 AIChestrator - Multi-Agent Task Execution\n');
+        log('┌─────────────────────────────────────────────────────────');
+        log(`│ 📋 Task: ${displayDesc}${description.length > 50 ? '...' : ''}`);
+        log(`│ 📁 Project: ${options.project}`);
+        log(`│ 🔧 Type: ${options.type}`);
+        log(`│ 🧠 Strategy: ${strategy}`);
+        log(`│ 👥 Max Workers: ${options.maxWorkers}`);
+        log(`│ 📝 Log file: ${logFile}`);
+        log('└─────────────────────────────────────────────────────────\n');
+      }
+
+      log(useTUI ? '' : '⏳ Initializing orchestrator...');
       await orchestrator.initialize();
 
-      log('🔄 Decomposing task into subtasks...\n');
+      if (!useTUI) {
+        log('🔄 Decomposing task into subtasks...\n');
+      }
 
-      // Track progress for display
+      // Track progress for display (non-TUI mode)
       const activeSubtasks = new Map<string, { startTime: number }>();
       let completedCount = 0;
       let totalSubtasks = 0;
 
-      // Subscribe to progress events
-      const eventBus = orchestrator.getEventBus();
+      if (!useTUI) {
+        // Subscribe to progress events for console output
+        const eventBus = orchestrator.getEventBus();
 
-      eventBus.on('subtask:assigned' as any, (event: any) => {
-        const shortId = event.subtaskId?.substring(0, 8) ?? '?';
-        const workerId = event.agentId?.substring(0, 8) ?? '?';
-        activeSubtasks.set(event.subtaskId, { startTime: Date.now() });
-        log(`  🚀 [${shortId}] Assigned to worker ${workerId}`);
-      });
+        eventBus.on('subtask:assigned' as any, (event: any) => {
+          const shortId = event.subtaskId?.substring(0, 8) ?? '?';
+          const workerId = event.agentId?.substring(0, 8) ?? '?';
+          activeSubtasks.set(event.subtaskId, { startTime: Date.now() });
+          log(`  🚀 [${shortId}] Assigned to worker ${workerId}`);
+        });
 
-      eventBus.on('subtask:completed' as any, (event: any) => {
-        const shortId = event.subtaskId?.substring(0, 8) ?? '?';
-        const info = activeSubtasks.get(event.subtaskId);
-        const duration = info ? ((Date.now() - info.startTime) / 1000).toFixed(1) : '?';
-        activeSubtasks.delete(event.subtaskId);
-        completedCount++;
-        const status = event.success ? '✅' : '❌';
-        log(`  ${status} [${shortId}] Done in ${duration}s (${completedCount}/${totalSubtasks})`);
-      });
+        eventBus.on('subtask:completed' as any, (event: any) => {
+          const shortId = event.subtaskId?.substring(0, 8) ?? '?';
+          const info = activeSubtasks.get(event.subtaskId);
+          const duration = info ? ((Date.now() - info.startTime) / 1000).toFixed(1) : '?';
+          activeSubtasks.delete(event.subtaskId);
+          completedCount++;
+          const status = event.success ? '✅' : '❌';
+          log(`  ${status} [${shortId}] Done in ${duration}s (${completedCount}/${totalSubtasks})`);
+        });
 
-      eventBus.on('task:started' as any, (event: any) => {
-        totalSubtasks = event.subtaskCount ?? 0;
-        log(`📋 Decomposed into ${totalSubtasks} subtasks\n`);
+        eventBus.on('task:started' as any, (event: any) => {
+          totalSubtasks = event.subtaskCount ?? 0;
+          log(`📋 Decomposed into ${totalSubtasks} subtasks\n`);
 
-        // Show subtask list
-        orchestrator.getSubtasks(event.taskId).then((subtasks) => {
-          log('Subtasks:');
-          for (const st of subtasks) {
-            const shortId = st.id.substring(0, 8);
-            const desc = st.description.substring(0, 60);
-            log(`  • [${shortId}] [${st.agentType}] ${desc}${st.description.length > 60 ? '...' : ''}`);
-          }
-          log('\nExecution:\n');
-        }).catch(() => {});
-      });
+          // Show subtask list
+          orchestrator.getSubtasks(event.taskId).then((subtasks) => {
+            log('Subtasks:');
+            for (const st of subtasks) {
+              const shortId = st.id.substring(0, 8);
+              const desc = st.description.substring(0, 60);
+              log(`  • [${shortId}] [${st.agentType}] ${desc}${st.description.length > 60 ? '...' : ''}`);
+            }
+            log('\nExecution:\n');
+          }).catch(() => {});
+        });
+      }
+
+      // Launch TUI if enabled
+      let tuiHandle: { waitForExit(): Promise<void> } | null = null;
+      if (useTUI) {
+        tuiHandle = launchTUI(orchestrator, { taskDescription: description });
+      }
 
       const result = await orchestrator.run({
         description,
@@ -196,6 +213,11 @@ program
         maxAgents: parseInt(options.maxWorkers, 10),
         timeoutMs: parseInt(options.timeout, 10)
       });
+
+      // Wait for TUI to finish rendering and exit
+      if (tuiHandle) {
+        await tuiHandle.waitForExit();
+      }
 
       log('\n' + '═'.repeat(60));
       log('📊 RESULTS');

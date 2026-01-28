@@ -73,6 +73,10 @@ export declare class WorkerPool extends EventEmitter {
         pending: number;
     };
     /**
+     * Cancel a specific worker's current task
+     */
+    cancelWorker(workerId: string): boolean;
+    /**
      * Shutdown the worker pool
      */
     shutdown(): Promise<void>;

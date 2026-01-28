@@ -749,10 +749,24 @@ If the error is unclear, use web_search to find solutions for the specific error
   /**
    * Subscribe to progress events with a callback
    */
-  onProgress(callback: (data: { type: string; subtaskId?: string; workerId?: string; message?: string }) => void): void {
+  onProgress(callback: (data: { type: string; subtaskId?: string; workerId?: string; stage?: string; message?: string }) => void): void {
     this.workerPool.on('progress', (data) => {
-      callback({ type: 'progress', subtaskId: data.subtaskId, workerId: data.workerId });
+      const agentProgress = data.data as { type?: string; content?: string } | undefined;
+      callback({
+        type: 'progress',
+        subtaskId: data.subtaskId,
+        workerId: data.workerId,
+        stage: agentProgress?.type,
+        message: agentProgress?.content
+      });
     });
+  }
+
+  /**
+   * Cancel a specific worker's current task
+   */
+  cancelWorker(workerId: string): boolean {
+    return this.workerPool.cancelWorker(workerId);
   }
 
   /**

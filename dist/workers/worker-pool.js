@@ -343,6 +343,32 @@ export class WorkerPool extends EventEmitter {
         };
     }
     /**
+     * Cancel a specific worker's current task
+     */
+    cancelWorker(workerId) {
+        const worker = this.workers.get(workerId);
+        if (!worker) {
+            this.logger.warn({ workerId }, 'Cannot cancel: worker not found');
+            return false;
+        }
+        if (worker.status !== 'busy') {
+            this.logger.warn({ workerId, status: worker.status }, 'Cannot cancel: worker not busy');
+            return false;
+        }
+        this.logger.info({ workerId }, 'Cancelling worker task');
+        // Send abort command
+        const command = { type: 'abort' };
+        worker.process.send(command);
+        // Give it a moment, then force kill if still running
+        setTimeout(() => {
+            if (worker.status === 'busy') {
+                this.logger.warn({ workerId }, 'Worker did not respond to abort, killing');
+                worker.process.kill('SIGTERM');
+            }
+        }, 3000);
+        return true;
+    }
+    /**
      * Shutdown the worker pool
      */
     async shutdown() {

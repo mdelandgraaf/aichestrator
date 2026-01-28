@@ -564,8 +564,21 @@ If the error is unclear, use web_search to find solutions for the specific error
      */
     onProgress(callback) {
         this.workerPool.on('progress', (data) => {
-            callback({ type: 'progress', subtaskId: data.subtaskId, workerId: data.workerId });
+            const agentProgress = data.data;
+            callback({
+                type: 'progress',
+                subtaskId: data.subtaskId,
+                workerId: data.workerId,
+                stage: agentProgress?.type,
+                message: agentProgress?.content
+            });
         });
+    }
+    /**
+     * Cancel a specific worker's current task
+     */
+    cancelWorker(workerId) {
+        return this.workerPool.cancelWorker(workerId);
     }
     /**
      * Resume a failed task by analyzing progress and re-decomposing for remaining work
