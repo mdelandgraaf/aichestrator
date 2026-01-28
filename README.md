@@ -71,6 +71,17 @@ Options:
   --verbose                 Show detailed output
 ```
 
+### Resume Failed Tasks
+
+If a task fails with some subtasks incomplete, you can resume without starting over:
+
+```bash
+# Resume a failed task (re-runs only failed subtasks)
+npm start -- resume <task-id>
+```
+
+This keeps results from successful subtasks and only re-runs the failed ones.
+
 ### Other Commands
 
 ```bash
