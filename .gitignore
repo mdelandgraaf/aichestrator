@@ -6,3 +6,6 @@
 
 # Logs
 .aichestrator/
+
+# Node modules
+node_modules/
