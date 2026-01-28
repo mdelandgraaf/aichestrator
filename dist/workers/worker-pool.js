@@ -66,10 +66,28 @@ export class WorkerPool extends EventEmitter {
     }
     /**
      * Execute multiple subtasks in parallel
+     * Uses allSettled to handle crashes gracefully - converts rejections to failure results
      */
     async executeAll(items) {
         const promises = items.map((item) => this.execute(item.subtask, item.taskId));
-        return Promise.all(promises);
+        // Use allSettled to prevent one crash from failing the whole batch
+        const results = await Promise.allSettled(promises);
+        return results.map((result, index) => {
+            if (result.status === 'fulfilled') {
+                return result.value;
+            }
+            else {
+                // Convert rejection to failure result for retry handling
+                const item = items[index];
+                this.logger.warn({ subtaskId: item.subtask.id, error: result.reason?.message || String(result.reason) }, 'Subtask execution failed, converting to failure result');
+                return {
+                    subtaskId: item.subtask.id,
+                    success: false,
+                    error: result.reason?.message || String(result.reason),
+                    executionMs: 0
+                };
+            }
+        });
     }
     async spawnWorker() {
         const workerId = nanoid();
@@ -212,9 +230,18 @@ export class WorkerPool extends EventEmitter {
     }
     handleWorkerError(worker, msg) {
         const callbacks = worker._taskCallbacks;
-        if (callbacks) {
-            callbacks.reject(new Error(String(msg.data)));
+        const taskInfo = worker._taskInfo;
+        if (callbacks && taskInfo) {
+            // Return a failure result instead of rejecting - allows retry logic to work
+            const errorResult = {
+                subtaskId: taskInfo.subtaskId,
+                success: false,
+                error: `Worker error: ${String(msg.data)}`,
+                executionMs: 0
+            };
+            callbacks.resolve(errorResult);
             delete worker._taskCallbacks;
+            delete worker._taskInfo;
         }
         worker.status = 'error';
         this.eventBus.emitAgentError(worker.id, String(msg.data), msg.subtaskId);
@@ -230,13 +257,24 @@ export class WorkerPool extends EventEmitter {
         if (idleIndex !== -1) {
             this.idleWorkers.splice(idleIndex, 1);
         }
-        // Reject any pending task
+        // Return a failure result instead of rejecting - allows retry logic to work
         const callbacks = worker._taskCallbacks;
-        if (callbacks) {
-            callbacks.reject(new Error(`Worker ${worker.id} exited unexpectedly`));
+        const taskInfo = worker._taskInfo;
+        if (callbacks && taskInfo) {
+            const errorMsg = signal
+                ? `Worker crashed with signal ${signal}`
+                : `Worker exited with code ${code}`;
+            const errorResult = {
+                subtaskId: taskInfo.subtaskId,
+                success: false,
+                error: errorMsg,
+                executionMs: 0
+            };
+            callbacks.resolve(errorResult);
+            this.logger.info({ workerId: worker.id, subtaskId: taskInfo.subtaskId }, 'Worker crash converted to failure result for retry');
         }
         // Spawn replacement if not shutting down
-        if (!this.isShuttingDown && this.pendingTasks.length > 0) {
+        if (!this.isShuttingDown) {
             this.spawnWorker().catch((error) => {
                 this.logger.error({ error: String(error) }, 'Failed to spawn replacement worker');
             });

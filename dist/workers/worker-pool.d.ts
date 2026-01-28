@@ -42,6 +42,7 @@ export declare class WorkerPool extends EventEmitter {
     execute(subtask: Subtask, taskId: string): Promise<SubtaskResult>;
     /**
      * Execute multiple subtasks in parallel
+     * Uses allSettled to handle crashes gracefully - converts rejections to failure results
      */
     executeAll(items: Array<{
         subtask: Subtask;
