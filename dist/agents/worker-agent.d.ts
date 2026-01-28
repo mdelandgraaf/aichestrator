@@ -19,6 +19,7 @@ export declare class WorkerAgent extends BaseAgent {
 export declare function createWorkerAgent(type: WorkerAgentConfig['type'], apiKey: string, model: string, memory: SharedMemory, options?: {
     maxTokens?: number;
     timeoutMs?: number;
+    allowInstall?: boolean;
 }): WorkerAgent;
 export {};
 //# sourceMappingURL=worker-agent.d.ts.map

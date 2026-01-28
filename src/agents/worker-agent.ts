@@ -537,8 +537,20 @@ export function createWorkerAgent(
   apiKey: string,
   model: string,
   memory: SharedMemory,
-  options?: { maxTokens?: number; timeoutMs?: number }
+  options?: { maxTokens?: number; timeoutMs?: number; allowInstall?: boolean }
 ): WorkerAgent {
+  const allowInstall = options?.allowInstall ?? process.env['ALLOW_INSTALL'] === '1';
+
+  const installPermissions = allowInstall
+    ? `\n\nINSTALLATION PERMISSIONS: You ARE allowed to install software and dependencies. You can run:
+- npm install, yarn add, pnpm add (Node.js packages)
+- pip install (Python packages)
+- sudo apt-get install, sudo yum install (system packages)
+- cargo add (Rust packages)
+- go get (Go packages)
+Use these commands when dependencies are missing or need to be installed.`
+    : `\n\nINSTALLATION RESTRICTIONS: You are NOT allowed to install software. Do not attempt to run sudo, npm install, pip install, or similar installation commands.`;
+
   const systemPrompts: Record<WorkerAgentConfig['type'], string> = {
     researcher: `You are a code researcher agent. Your job is to analyze codebases thoroughly.
 You have access to tools: read_file, list_files, run_command, web_search, fetch_url.
@@ -606,7 +618,7 @@ IMPORTANT: You MUST use the write_file tool to create documentation files.`
       type,
       model,
       apiKey,
-      systemPrompt: systemPrompts[type],
+      systemPrompt: systemPrompts[type] + installPermissions,
       maxTokens: options?.maxTokens ?? 4096,
       timeoutMs: options?.timeoutMs ?? 300000
     },
