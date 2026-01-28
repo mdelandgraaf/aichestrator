@@ -217,7 +217,7 @@ export class WorkerAgent extends BaseAgent {
                 messages.push({ role: 'user', content: toolResults });
             }
             // Share key discoveries with other agents
-            await this.extractAndShareDiscoveries(subtask.parentTaskId, output);
+            await this.extractAndShareDiscoveries(subtask.parentTaskId, output, filesModified);
             yield this.createProgress('complete', `Task completed. Files modified: ${filesModified.length}`);
             const executionMs = Date.now() - startTime;
             this.logger.info({ subtaskId: subtask.id, executionMs, filesModified: filesModified.length }, 'Subtask completed');
@@ -396,14 +396,24 @@ export class WorkerAgent extends BaseAgent {
         prompt += `If you discover important information (files, patterns, insights), note them clearly.\n`;
         return prompt;
     }
-    async extractAndShareDiscoveries(taskId, output) {
-        // Simple pattern matching to extract discoveries
-        // In a production system, this could be more sophisticated
-        const filePattern = /(?:found|discovered|located|file[s]?:?\s*)([^\n,]+\.(?:ts|js|py|json|md))/gi;
+    async extractAndShareDiscoveries(taskId, output, filesModified) {
+        // Share actual files that were modified by this agent
+        for (const file of filesModified) {
+            await this.shareDiscovery(taskId, 'file', { path: file });
+        }
+        // Extract file paths mentioned in output - require path-like patterns
+        // Must contain path separator (/) or start with common path prefixes, and end with file extension
+        const filePattern = /(?:^|[\s'"`])((\.{0,2}\/)?(?:[\w.-]+\/)+[\w.-]+\.(?:ts|tsx|js|jsx|py|json|md|yml|yaml|css|scss|html|go|rs|java|c|cpp|h|hpp))\b/gi;
         const matches = output.matchAll(filePattern);
+        const seenPaths = new Set(filesModified);
         for (const match of matches) {
             if (match[1]) {
-                await this.shareDiscovery(taskId, 'file', { path: match[1].trim() });
+                const path = match[1].trim();
+                // Avoid duplicates and filter out obviously wrong matches
+                if (!seenPaths.has(path) && path.length > 3 && path.includes('/')) {
+                    seenPaths.add(path);
+                    await this.shareDiscovery(taskId, 'file', { path });
+                }
             }
         }
         // Extract any explicitly marked insights

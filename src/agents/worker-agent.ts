@@ -273,7 +273,7 @@ export class WorkerAgent extends BaseAgent {
       }
 
       // Share key discoveries with other agents
-      await this.extractAndShareDiscoveries(subtask.parentTaskId, output);
+      await this.extractAndShareDiscoveries(subtask.parentTaskId, output, filesModified);
 
       yield this.createProgress('complete', `Task completed. Files modified: ${filesModified.length}`);
 
@@ -489,15 +489,26 @@ export class WorkerAgent extends BaseAgent {
     return prompt;
   }
 
-  private async extractAndShareDiscoveries(taskId: string, output: string): Promise<void> {
-    // Simple pattern matching to extract discoveries
-    // In a production system, this could be more sophisticated
-    const filePattern = /(?:found|discovered|located|file[s]?:?\s*)([^\n,]+\.(?:ts|js|py|json|md))/gi;
+  private async extractAndShareDiscoveries(taskId: string, output: string, filesModified: string[]): Promise<void> {
+    // Share actual files that were modified by this agent
+    for (const file of filesModified) {
+      await this.shareDiscovery(taskId, 'file', { path: file });
+    }
+
+    // Extract file paths mentioned in output - require path-like patterns
+    // Must contain path separator (/) or start with common path prefixes, and end with file extension
+    const filePattern = /(?:^|[\s'"`])((\.{0,2}\/)?(?:[\w.-]+\/)+[\w.-]+\.(?:ts|tsx|js|jsx|py|json|md|yml|yaml|css|scss|html|go|rs|java|c|cpp|h|hpp))\b/gi;
     const matches = output.matchAll(filePattern);
+    const seenPaths = new Set(filesModified);
 
     for (const match of matches) {
       if (match[1]) {
-        await this.shareDiscovery(taskId, 'file', { path: match[1].trim() });
+        const path = match[1].trim();
+        // Avoid duplicates and filter out obviously wrong matches
+        if (!seenPaths.has(path) && path.length > 3 && path.includes('/')) {
+          seenPaths.add(path);
+          await this.shareDiscovery(taskId, 'file', { path });
+        }
       }
     }
 
