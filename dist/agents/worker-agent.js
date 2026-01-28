@@ -22,6 +22,62 @@ function readClaudeMd(projectPath) {
     return null;
 }
 /**
+ * Read the shared knowledge file from the project directory
+ * This file contains discoveries and insights from all agents
+ */
+function readSharedKnowledge(projectPath) {
+    const knowledgeFile = join(projectPath, '.aichestrator', 'shared-knowledge.md');
+    if (existsSync(knowledgeFile)) {
+        try {
+            return readFileSync(knowledgeFile, 'utf-8');
+        }
+        catch {
+            return null;
+        }
+    }
+    return null;
+}
+/**
+ * Append an entry to the shared knowledge file
+ * This allows agents to share discoveries with future agents
+ */
+function appendSharedKnowledge(projectPath, agentType, category, content) {
+    const knowledgeDir = join(projectPath, '.aichestrator');
+    const knowledgeFile = join(knowledgeDir, 'shared-knowledge.md');
+    if (!existsSync(knowledgeDir)) {
+        mkdirSync(knowledgeDir, { recursive: true });
+    }
+    const timestamp = new Date().toISOString();
+    const categoryEmoji = {
+        file: '📄',
+        pattern: '🔄',
+        insight: '💡',
+        architecture: '🏗️',
+        dependency: '📦',
+        issue: '⚠️'
+    };
+    // Initialize file if it doesn't exist
+    if (!existsSync(knowledgeFile)) {
+        writeFileSync(knowledgeFile, `# Shared Knowledge Base
+
+This file contains discoveries and insights gathered by all agents during task execution.
+Agents can read this file for context and add new entries as they discover important information.
+
+---
+
+`);
+    }
+    const entry = `### ${categoryEmoji[category] || '📝'} [${category.toUpperCase()}] from ${agentType}
+*${timestamp}*
+
+${content}
+
+---
+
+`;
+    appendFileSync(knowledgeFile, entry);
+}
+/**
  * Update the shared status file with worker progress
  */
 function updateStatusFile(projectPath, workerId, agentType, status, description, details) {
@@ -114,6 +170,25 @@ const TOOLS = [
                 url: { type: 'string', description: 'URL to fetch' }
             },
             required: ['url']
+        }
+    },
+    {
+        name: 'share_knowledge',
+        description: 'Share important discoveries with other agents. Use this to document: architectural decisions, discovered patterns, dependencies, issues found, or any insights that would help other agents.',
+        input_schema: {
+            type: 'object',
+            properties: {
+                category: {
+                    type: 'string',
+                    enum: ['file', 'pattern', 'insight', 'architecture', 'dependency', 'issue'],
+                    description: 'Category of knowledge: file (important file discovered), pattern (code pattern found), insight (useful information), architecture (structural decision), dependency (external dependency), issue (problem found)'
+                },
+                content: {
+                    type: 'string',
+                    description: 'The knowledge to share. Be specific and include relevant details like file paths, code examples, or configuration values.'
+                }
+            },
+            required: ['category', 'content']
         }
     }
 ];
@@ -216,8 +291,8 @@ export class WorkerAgent extends BaseAgent {
                 // Add tool results
                 messages.push({ role: 'user', content: toolResults });
             }
-            // Share key discoveries with other agents
-            await this.extractAndShareDiscoveries(subtask.parentTaskId, output, filesModified);
+            // Share key discoveries with other agents (Redis + file-based)
+            await this.extractAndShareDiscoveries(subtask.parentTaskId, projectPath, output, filesModified);
             yield this.createProgress('complete', `Task completed. Files modified: ${filesModified.length}`);
             const executionMs = Date.now() - startTime;
             this.logger.info({ subtaskId: subtask.id, executionMs, filesModified: filesModified.length }, 'Subtask completed');
@@ -371,6 +446,18 @@ export class WorkerAgent extends BaseAgent {
                         return { content: `Fetch failed: ${error instanceof Error ? error.message : String(error)}`, isError: true };
                     }
                 }
+                case 'share_knowledge': {
+                    const category = input['category'];
+                    const content = input['content'];
+                    try {
+                        appendSharedKnowledge(basePath, this.config.type, category, content);
+                        this.logger.info({ category }, 'Knowledge shared to file');
+                        return { content: `Knowledge shared successfully: [${category}] ${content.substring(0, 100)}...`, isError: false };
+                    }
+                    catch (error) {
+                        return { content: `Failed to share knowledge: ${error instanceof Error ? error.message : String(error)}`, isError: true };
+                    }
+                }
                 default:
                     return { content: `Unknown tool: ${name}`, isError: true };
             }
@@ -386,9 +473,21 @@ export class WorkerAgent extends BaseAgent {
         if (claudeMdContent) {
             prompt += `## Project Context (from CLAUDE.md)\n${claudeMdContent}\n\n`;
         }
+        // Include shared knowledge from other agents (file-based, persistent)
+        const projectPath = context?.projectPath;
+        if (projectPath) {
+            const sharedKnowledge = readSharedKnowledge(projectPath);
+            if (sharedKnowledge) {
+                // Extract just the entries (skip the header)
+                const entries = sharedKnowledge.split('---\n').slice(2).join('---\n');
+                if (entries.trim()) {
+                    prompt += `## Shared Knowledge Base\nThe following discoveries have been made by other agents:\n\n${entries}\n`;
+                }
+            }
+        }
         prompt += `## Task\n${subtask.description}\n\n`;
         if (context && context.discoveries.length > 0) {
-            prompt += `## Context from other agents\n`;
+            prompt += `## Recent discoveries (from Redis)\n`;
             prompt += `Project path: ${context.projectPath}\n\n`;
             const recentDiscoveries = context.discoveries.slice(-10);
             for (const discovery of recentDiscoveries) {
@@ -398,13 +497,17 @@ export class WorkerAgent extends BaseAgent {
         }
         prompt += `## Instructions\n`;
         prompt += `Complete the task above. Be thorough and precise.\n`;
-        prompt += `If you discover important information (files, patterns, insights), note them clearly.\n`;
+        prompt += `If you discover important information (files, patterns, architecture decisions, dependencies, or issues), use the share_knowledge tool to document them for other agents.\n`;
         return prompt;
     }
-    async extractAndShareDiscoveries(taskId, output, filesModified) {
-        // Share actual files that were modified by this agent
-        for (const file of filesModified) {
-            await this.shareDiscovery(taskId, 'file', { path: file });
+    async extractAndShareDiscoveries(taskId, projectPath, output, filesModified) {
+        // Share actual files that were modified by this agent (to Redis and file)
+        if (filesModified.length > 0) {
+            for (const file of filesModified) {
+                await this.shareDiscovery(taskId, 'file', { path: file });
+            }
+            // Write to shared knowledge file
+            appendSharedKnowledge(projectPath, this.config.type, 'file', `Files created/modified:\n${filesModified.map(f => `- ${f}`).join('\n')}`);
         }
         // Extract file paths mentioned in output - require path-like patterns
         // Must contain path separator (/) or start with common path prefixes, and end with file extension
@@ -424,10 +527,16 @@ export class WorkerAgent extends BaseAgent {
         // Extract any explicitly marked insights
         const insightPattern = /(?:insight|important|note|key finding):\s*([^\n]+)/gi;
         const insights = output.matchAll(insightPattern);
+        const extractedInsights = [];
         for (const insight of insights) {
             if (insight[1]) {
+                extractedInsights.push(insight[1].trim());
                 await this.shareDiscovery(taskId, 'insight', { text: insight[1].trim() });
             }
+        }
+        // Write insights to shared knowledge file
+        if (extractedInsights.length > 0) {
+            appendSharedKnowledge(projectPath, this.config.type, 'insight', extractedInsights.join('\n'));
         }
     }
 }
@@ -453,9 +562,10 @@ You are part of AIChestrator, a multi-agent orchestration system. Multiple speci
 - Don't give up easily - try multiple approaches before declaring failure
 
 **Shared context:**
-- Check the "Context from other agents" section for discoveries from teammates
-- Other agents may have found relevant files, patterns, or insights
-- Your findings will be shared with agents who run after you
+- Check the "Shared Knowledge Base" section for discoveries from other agents
+- Other agents may have found relevant files, patterns, architecture decisions, or insights
+- Use the share_knowledge tool to document important discoveries for future agents
+- Categories: file, pattern, insight, architecture, dependency, issue
 
 **Goal orientation:**
 - The ultimate goal is a WORKING, FUNCTIONAL end result
@@ -467,6 +577,7 @@ You are part of AIChestrator, a multi-agent orchestration system. Multiple speci
 - Check for CLAUDE.md in the project root for project-specific guidelines
 - Follow existing patterns and conventions in the codebase
 - Status is tracked in .aichestrator/status.md
+- Shared knowledge is stored in .aichestrator/shared-knowledge.md
 
 ---
 
