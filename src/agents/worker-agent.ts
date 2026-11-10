@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { nanoid } from 'nanoid';
-import { execSync } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } from 'fs';
 import { dirname, resolve, join } from 'path';
 import { BaseAgent, AgentConfig, AgentProgress } from './base-agent.js';
@@ -466,8 +466,13 @@ export class WorkerAgent extends BaseAgent {
             return { content: `Directory not found: ${path}`, isError: true };
           }
           const pattern = input['pattern'] as string | undefined;
-          const cmd = pattern ? `find . -name "${pattern}" -type f | head -100` : 'ls -la';
-          const output = execSync(cmd, { cwd: path, timeout: 10000, encoding: 'utf-8' });
+          // execFileSync (no shell) so a model-supplied pattern can't inject shell syntax
+          const output = pattern
+            ? execFileSync('find', ['.', '-name', pattern, '-type', 'f'], { cwd: path, timeout: 10000, encoding: 'utf-8', maxBuffer: 1024 * 1024 })
+                .split('\n')
+                .slice(0, 100)
+                .join('\n')
+            : execFileSync('ls', ['-la'], { cwd: path, timeout: 10000, encoding: 'utf-8' });
           return { content: output, isError: false };
         }
 
